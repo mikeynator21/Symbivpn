@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 #
-# WiFiGuard installer for Linux (Debian, Ubuntu, Raspberry Pi OS, Fedora, Arch).
+# SymbiVPN installer for Linux (Debian, Ubuntu, Raspberry Pi OS, Fedora, Arch).
 #
 #   curl -fsSL https://raw.githubusercontent.com/mikeynator21/Symbivpn/HEAD/install.sh | sudo bash
 #
 # or, from a clone:  sudo ./install.sh
 #
-# Installs to /opt/wifiguard, puts a launcher in /usr/local/bin, and sets up a
+# Installs to /opt/symbivpn, puts a launcher in /usr/local/bin, and sets up a
 # systemd unit. It does not start filtering until you say so.
 
 set -euo pipefail
 
-PREFIX="${PREFIX:-/opt/wifiguard}"
+PREFIX="${PREFIX:-/opt/symbivpn}"
 BINDIR="${BINDIR:-/usr/local/bin}"
-CONFDIR="${CONFDIR:-/etc/wifiguard}"
-STATEDIR="${STATEDIR:-/var/lib/wifiguard}"
+CONFDIR="${CONFDIR:-/etc/symbivpn}"
+STATEDIR="${STATEDIR:-/var/lib/symbivpn}"
 REPO="${REPO:-https://github.com/mikeynator21/Symbivpn}"
 
 info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
@@ -26,7 +26,7 @@ die()   { printf '\033[1;31m error:\033[0m %s\n' "$*" >&2; exit 1; }
 # --- Python ------------------------------------------------------------------
 PYTHON="$(command -v python3 || true)"
 [[ -n "$PYTHON" ]] || die "python3 is not installed"
-"$PYTHON" - <<'PY' || die "WiFiGuard needs Python 3.11 or newer (it uses tomllib)"
+"$PYTHON" - <<'PY' || die "SymbiVPN needs Python 3.11 or newer (it uses tomllib)"
 import sys
 raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
 PY
@@ -62,10 +62,10 @@ fi
 
 # --- source -------------------------------------------------------------------
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -d "$SOURCE_DIR/wifiguard" ]]; then
+if [[ -d "$SOURCE_DIR/symbivpn" ]]; then
     info "installing from $SOURCE_DIR"
     mkdir -p "$PREFIX"
-    cp -r "$SOURCE_DIR/wifiguard" "$PREFIX/"
+    cp -r "$SOURCE_DIR/symbivpn" "$PREFIX/"
     [[ -d "$SOURCE_DIR/deploy" ]] && cp -r "$SOURCE_DIR/deploy" "$PREFIX/"
 else
     command -v git >/dev/null || die "git is needed to fetch the source"
@@ -76,40 +76,40 @@ else
     mv "$PREFIX.tmp" "$PREFIX"
 fi
 
-"$PYTHON" -m compileall -q "$PREFIX/wifiguard"
+"$PYTHON" -m compileall -q "$PREFIX/symbivpn"
 
 # --- launcher -----------------------------------------------------------------
 # /usr/local/bin exists on most systems but not all of them, and BINDIR can be
 # pointed anywhere.
 mkdir -p "$BINDIR"
-cat > "$BINDIR/wifiguard" <<LAUNCHER
+cat > "$BINDIR/symbivpn" <<LAUNCHER
 #!/bin/sh
-# WiFiGuard launcher, written by install.sh
-exec ${PYTHON} -m wifiguard.cli "\$@"
+# SymbiVPN launcher, written by install.sh
+exec ${PYTHON} -m symbivpn.cli "\$@"
 LAUNCHER
-sed -i "1a PYTHONPATH=\"${PREFIX}:\${PYTHONPATH}\"; export PYTHONPATH" "$BINDIR/wifiguard"
-chmod +x "$BINDIR/wifiguard"
+sed -i "1a PYTHONPATH=\"${PREFIX}:\${PYTHONPATH}\"; export PYTHONPATH" "$BINDIR/symbivpn"
+chmod +x "$BINDIR/symbivpn"
 
 # --- directories and config ---------------------------------------------------
 mkdir -p "$CONFDIR" "$STATEDIR"
 chmod 700 "$STATEDIR"
 
-if [[ -f "$CONFDIR/wifiguard.toml" ]]; then
-    info "keeping the existing $CONFDIR/wifiguard.toml"
+if [[ -f "$CONFDIR/symbivpn.toml" ]]; then
+    info "keeping the existing $CONFDIR/symbivpn.toml"
 elif [[ -t 0 ]]; then
     # Interactive: ask the four questions rather than leaving a reference file
     # for someone to work through.
     info "let's configure it"
     echo
-    "$BINDIR/wifiguard" setup --out "$CONFDIR/wifiguard.toml" || {
+    "$BINDIR/symbivpn" setup --out "$CONFDIR/symbivpn.toml" || {
         warn "setup did not finish; writing a starter config instead"
-        "$BINDIR/wifiguard" init-config > "$CONFDIR/wifiguard.toml"
-        chmod 600 "$CONFDIR/wifiguard.toml"
+        "$BINDIR/symbivpn" init-config > "$CONFDIR/symbivpn.toml"
+        chmod 600 "$CONFDIR/symbivpn.toml"
     }
 else
     info "no terminal, so writing a commented starter config"
-    "$BINDIR/wifiguard" init-config > "$CONFDIR/wifiguard.toml"
-    chmod 600 "$CONFDIR/wifiguard.toml"
+    "$BINDIR/symbivpn" init-config > "$CONFDIR/symbivpn.toml"
+    chmod 600 "$CONFDIR/symbivpn.toml"
     RAN_SETUP=no
 fi
 
@@ -119,33 +119,33 @@ fi
 # install is complete either way, so a failure here is reported, not fatal --
 # `set -e` would otherwise abort a working install with "Host is down".
 SERVICE=no
-if command -v systemctl >/dev/null && [[ -f "$PREFIX/deploy/wifiguard.service" ]]; then
-    if install -m 644 "$PREFIX/deploy/wifiguard.service" \
-            /etc/systemd/system/wifiguard.service 2>/dev/null \
+if command -v systemctl >/dev/null && [[ -f "$PREFIX/deploy/symbivpn.service" ]]; then
+    if install -m 644 "$PREFIX/deploy/symbivpn.service" \
+            /etc/systemd/system/symbivpn.service 2>/dev/null \
             && systemctl daemon-reload 2>/dev/null; then
         info "systemd unit installed (not enabled yet)"
         SERVICE=yes
     else
         warn "systemd is not running here, so there is no service to enable"
-        warn "start it yourself with: sudo wifiguard run"
+        warn "start it yourself with: sudo symbivpn run"
     fi
-elif [[ -f "$PREFIX/deploy/wifiguard.service" ]]; then
-    warn "no systemd on this machine; start it with: sudo wifiguard run"
+elif [[ -f "$PREFIX/deploy/symbivpn.service" ]]; then
+    warn "no systemd on this machine; start it with: sudo symbivpn run"
 fi
 
 # --- verify -------------------------------------------------------------------
 info "running the self-test"
-if "$BINDIR/wifiguard" selftest --port 15353 >/tmp/wifiguard-selftest.log 2>&1; then
-    tail -3 /tmp/wifiguard-selftest.log
+if "$BINDIR/symbivpn" selftest --port 15353 >/tmp/symbivpn-selftest.log 2>&1; then
+    tail -3 /tmp/symbivpn-selftest.log
 else
-    warn "the self-test reported problems; see /tmp/wifiguard-selftest.log"
+    warn "the self-test reported problems; see /tmp/symbivpn-selftest.log"
 fi
 
 if [[ "$SERVICE" == "yes" ]]; then
-    START_COMMAND="sudo systemctl enable --now wifiguard"
+    START_COMMAND="sudo systemctl enable --now symbivpn"
     RESOLVED_NOTE=$'Port 53 is usually held by systemd-resolved. If `doctor` says so:\n  sudo systemctl disable --now systemd-resolved\n  sudo rm -f /etc/resolv.conf\n  echo \'nameserver 127.0.0.1\' | sudo tee /etc/resolv.conf\n'
 else
-    START_COMMAND="sudo wifiguard run"
+    START_COMMAND="sudo symbivpn run"
     RESOLVED_NOTE=$'If `doctor` says port 53 is already taken, stop whatever holds it\nfirst -- on most systems that is systemd-resolved.\n'
 fi
 
@@ -159,22 +159,22 @@ export START_COMMAND RESOLVED_NOTE
 if [[ "${RAN_SETUP:-yes}" == "no" ]]; then
 cat <<'NEXT'
 
-WiFiGuard is installed, but not configured.
+SymbiVPN is installed, but not configured.
 
-  sudo wifiguard setup      four questions, then a working config
+  sudo symbivpn setup      four questions, then a working config
 
-Or edit /etc/wifiguard/wifiguard.toml by hand -- every setting in it is
+Or edit /etc/symbivpn/symbivpn.toml by hand -- every setting in it is
 commented.
 NEXT
 else
 fill <<'NEXT'
 
-WiFiGuard is installed and configured.
+SymbiVPN is installed and configured.
 
-  wifiguard doctor      is this machine ready?
-  wifiguard fieldtest   what is this network doing to my DNS?
-  wifiguard selftest    does the filtering work? (no root needed)
-  wifiguard harden      any weak settings?
+  symbivpn doctor      is this machine ready?
+  symbivpn fieldtest   what is this network doing to my DNS?
+  symbivpn selftest    does the filtering work? (no root needed)
+  symbivpn harden      any weak settings?
 
 Then start it:
   START_COMMAND

@@ -21,7 +21,7 @@ with:
 iw list | grep -A10 "Supported interface modes"
 ```
 
-If `AP` is in that list, you are fine. `wifiguard doctor` checks this for you.
+If `AP` is in that list, you are fine. `symbivpn doctor` checks this for you.
 
 Ethernet for the uplink and WiFi for the hotspot works too, and is the most
 reliable arrangement of all.
@@ -31,10 +31,10 @@ reliable arrangement of all.
 ## Setting it up
 
 ```bash
-sudo cp deploy/examples/laptop-gateway.toml /etc/wifiguard/wifiguard.toml
-sudo nano /etc/wifiguard/wifiguard.toml     # set the passphrase
-sudo wifiguard doctor
-sudo systemctl enable --now wifiguard
+sudo cp deploy/examples/laptop-gateway.toml /etc/symbivpn/symbivpn.toml
+sudo nano /etc/symbivpn/symbivpn.toml     # set the passphrase
+sudo symbivpn doctor
+sudo systemctl enable --now symbivpn
 ```
 
 Leave `interface`, `uplink` and `subnet` empty. All three are worked out live:
@@ -45,11 +45,11 @@ Leave `interface`, `uplink` and `subnet` empty. All three are worked out live:
   matters, because hotel and cafe networks are almost always `192.168.0.0/24`
   or `192.168.1.0/24`.
 
-Then join `WiFiGuard` from your phone, tablet or TV with the passphrase you set.
+Then join `SymbiVPN` from your phone, tablet or TV with the passphrase you set.
 
 ## What the clients get
 
-An address and a DNS server from WiFiGuard's own DHCP server, a NAT'd route to
+An address and a DNS server from SymbiVPN's own DHCP server, a NAT'd route to
 the internet, and:
 
 - **Filtered DNS**, with port 53 redirected so a device with a hardcoded
@@ -71,9 +71,9 @@ against the new one within five seconds. Clients keep their leases and their
 connections to the hotspot; only the far side moves.
 
 ```console
-$ wifiguard status
+$ symbivpn status
   gateway
-    ssid        WiFiGuard
+    ssid        SymbiVPN
     access pt   wlan1 (10.42.7.0/24)
     uplink      wlan0
     firewall    active
@@ -102,11 +102,11 @@ and the difference between a VPN and a suggestion.
 ## Turning it off
 
 ```bash
-sudo systemctl stop wifiguard      # stops the hotspot and removes the rules
-sudo wifiguard gateway down        # removes the rules only
+sudo systemctl stop symbivpn      # stops the hotspot and removes the rules
+sudo symbivpn gateway down        # removes the rules only
 ```
 
-The firewall rules live in their own nftables tables named `wifiguard*` and are
+The firewall rules live in their own nftables tables named `symbivpn*` and are
 applied atomically, so nothing else on the host is disturbed and teardown is
 clean.
 

@@ -1,6 +1,6 @@
 """Ask a server for the time, the way a device with no clock would.
 
-Written straight from RFC 5905's packet layout rather than reusing WiFiGuard's
+Written straight from RFC 5905's packet layout rather than reusing SymbiVPN's
 own encoder, so a shared misunderstanding of the format cannot pass.
 """
 

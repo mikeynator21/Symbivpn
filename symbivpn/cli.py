@@ -37,7 +37,7 @@ def setup_logging(level: str) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="wifiguard",
+        prog="symbivpn",
         description=(
             "A network-wide ad blocker, encrypted DNS resolver and portable VPN "
             "gateway. Protects every device on the network without installing "
@@ -46,16 +46,16 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Getting started:\n"
-            "  sudo wifiguard setup        # answer a few questions, get a config\n"
-            "  wifiguard doctor            # check this machine is ready\n"
-            "  wifiguard fieldtest         # what is this network doing to my DNS?\n"
-            "  sudo wifiguard run          # start filtering\n"
-            "  wifiguard selftest          # prove it works, no root needed\n"
+            "  sudo symbivpn setup        # answer a few questions, get a config\n"
+            "  symbivpn doctor            # check this machine is ready\n"
+            "  symbivpn fieldtest         # what is this network doing to my DNS?\n"
+            "  sudo symbivpn run          # start filtering\n"
+            "  symbivpn selftest          # prove it works, no root needed\n"
         ),
     )
-    parser.add_argument("--config", "-c", help="path to wifiguard.toml")
+    parser.add_argument("--config", "-c", help="path to symbivpn.toml")
     parser.add_argument("--log-level", default="", help="DEBUG, INFO, WARNING or ERROR")
-    parser.add_argument("--version", action="version", version=f"WiFiGuard {__version__}")
+    parser.add_argument("--version", action="version", version=f"SymbiVPN {__version__}")
 
     sub = parser.add_subparsers(dest="command", required=True, metavar="<command>")
 
@@ -87,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     fieldtest = sub.add_parser(
         "fieldtest",
-        help="assess the network this machine is on, and what WiFiGuard would change",
+        help="assess the network this machine is on, and what SymbiVPN would change",
     )
     fieldtest.add_argument("--quick", action="store_true", help="skip the slower probes")
     fieldtest.add_argument(
@@ -166,7 +166,7 @@ def build_parser() -> argparse.ArgumentParser:
     compat_scan.add_argument("--limit", type=int, default=500)
 
     cluster = sub.add_parser(
-        "cluster", help="run WiFiGuard on several devices that cover for each other"
+        "cluster", help="run SymbiVPN on several devices that cover for each other"
     )
     cluster_sub = cluster.add_subparsers(dest="cluster_command", required=True)
     cluster_sub.add_parser("status", help="show this node and its peers")
@@ -190,10 +190,10 @@ def command_run(args: argparse.Namespace, cfg: Config) -> int:
         # filters this machine and nothing else -- which is rarely what
         # someone starting the service intended, and gives no clue why.
         print(
-            "No configuration file found, so WiFiGuard is running with defaults:\n"
+            "No configuration file found, so SymbiVPN is running with defaults:\n"
             "  filtering for this machine only, on 127.0.0.1.\n\n"
             "To cover the rest of your network, stop this and run:\n"
-            "  sudo wifiguard setup\n",
+            "  sudo symbivpn setup\n",
             file=sys.stderr,
         )
 
@@ -212,7 +212,7 @@ def command_run(args: argparse.Namespace, cfg: Config) -> int:
     except PermissionError:
         print(
             f"Permission denied binding port {cfg.server.port}. Ports below 1024 need "
-            f"root: try `sudo wifiguard run`, or set server.port to something above 1024 "
+            f"root: try `sudo symbivpn run`, or set server.port to something above 1024 "
             f"and redirect port 53 to it.",
             file=sys.stderr,
         )
@@ -278,18 +278,18 @@ def command_status(args: argparse.Namespace, cfg: Config) -> int:
     try:
         status = _api(cfg, "/api/status")
     except NotRunning as exc:
-        print(f"WiFiGuard does not appear to be running ({exc}).", file=sys.stderr)
+        print(f"SymbiVPN does not appear to be running ({exc}).", file=sys.stderr)
         print(
             f"Tried http://{_dashboard_host(cfg)}:{cfg.dashboard.port}/api/status",
             file=sys.stderr,
         )
         return 1
     except (ApiError, Ambiguous) as exc:
-        print(f"WiFiGuard is running, but {exc}", file=sys.stderr)
+        print(f"SymbiVPN is running, but {exc}", file=sys.stderr)
         return 1
 
     counters = status["counters"]
-    print(f"WiFiGuard {status['version']} — {status['protection']} protection")
+    print(f"SymbiVPN {status['version']} — {status['protection']} protection")
     print(f"  uptime        {_duration(status['uptime_seconds'])}")
     print(f"  queries       {counters['total']:,}")
     print(f"  blocked       {counters['blocked']:,} ({counters['block_rate'] * 100:.1f}%)")
@@ -327,7 +327,7 @@ def command_doctor(args: argparse.Namespace, cfg: Config) -> int:
     checks.append((
         f"python {sys.version_info.major}.{sys.version_info.minor}",
         sys.version_info >= (3, 11),
-        "WiFiGuard needs Python 3.11 or newer (it uses tomllib)",
+        "SymbiVPN needs Python 3.11 or newer (it uses tomllib)",
     ))
 
     port_free = _port_available(cfg.server.port)
@@ -395,7 +395,7 @@ def command_doctor(args: argparse.Namespace, cfg: Config) -> int:
 
     print()
     if failures:
-        print(f"{failures} check(s) failed. WiFiGuard may still start, but fix these first.")
+        print(f"{failures} check(s) failed. SymbiVPN may still start, but fix these first.")
         return 1
     print("Everything checks out.")
     return 0
@@ -425,7 +425,7 @@ def command_fieldtest(args: argparse.Namespace, cfg: Config) -> int:
             print(f"    - {finding.title}")
         print()
         print("  These are things the network is doing to your traffic, not faults")
-        print("  in this machine. Each one above says what WiFiGuard does about it.")
+        print("  in this machine. Each one above says what SymbiVPN does about it.")
         return 1
 
     if warnings:
@@ -435,7 +435,7 @@ def command_fieldtest(args: argparse.Namespace, cfg: Config) -> int:
         return 0
 
     print("  This network looks clean: no interception, no rewriting, and")
-    print("  encrypted DNS gets out. WiFiGuard will filter ads and trackers here")
+    print("  encrypted DNS gets out. SymbiVPN will filter ads and trackers here")
     print("  without having to work around anything.")
     return 0
 
@@ -472,17 +472,17 @@ def _local_rule(cfg: Config, domain: str, *, allow: bool) -> int:
         # It is running and refused us. Writing the rule to disk anyway would
         # leave the daemon still filtering the name while telling the caller it
         # had been allowed, which is worse than failing.
-        print(f"WiFiGuard is running, but {exc}", file=sys.stderr)
+        print(f"SymbiVPN is running, but {exc}", file=sys.stderr)
         print(f"\n{domain} was NOT changed.", file=sys.stderr)
         return 1
     except Ambiguous as exc:
         # The request went out and the answer did not come back. It may well
         # have been applied, so writing it again locally and announcing "not
         # running" would be a guess dressed up as a fact.
-        print(f"Lost contact with WiFiGuard partway through ({exc}).", file=sys.stderr)
+        print(f"Lost contact with SymbiVPN partway through ({exc}).", file=sys.stderr)
         print(
             f"\n{domain} may or may not have been changed. Check with:\n"
-            f"  wifiguard check {domain}",
+            f"  symbivpn check {domain}",
             file=sys.stderr,
         )
         return 2
@@ -492,7 +492,7 @@ def _local_rule(cfg: Config, domain: str, *, allow: bool) -> int:
     application = Application(cfg)
     application.add_local_rule(domain, allow=allow)
     print(
-        f"{verb} {domain}. WiFiGuard is not running, so this takes effect when "
+        f"{verb} {domain}. SymbiVPN is not running, so this takes effect when "
         f"it next starts."
     )
     return 0
@@ -559,7 +559,7 @@ def _dispatch_vpn(args: argparse.Namespace, cfg: Config, manager: WireGuardManag
         print(f"  peer DNS     {server.resolver}")
         print()
         print("Next: add a device with")
-        print(f"  wifiguard vpn add-peer phone --mobile")
+        print(f"  symbivpn vpn add-peer phone --mobile")
         return 0
 
     if command == "add-peer":
@@ -593,7 +593,7 @@ def _dispatch_vpn(args: argparse.Namespace, cfg: Config, manager: WireGuardManag
     if command == "list":
         peers = manager.status()
         if not peers:
-            print("No peers yet. Add one with `wifiguard vpn add-peer <name>`.")
+            print("No peers yet. Add one with `symbivpn vpn add-peer <name>`.")
             return 0
         for peer in peers:
             state = "connected" if peer.get("connected") else (
@@ -684,7 +684,7 @@ def command_compat(args: argparse.Namespace, cfg: Config) -> int:
     command = getattr(args, "compat_command", None) or "status"
 
     if command == "devices":
-        print("Device profiles. Add the ones on your network to wifiguard.toml:\n")
+        print("Device profiles. Add the ones on your network to symbivpn.toml:\n")
         print('  [compatibility]')
         print('  devices = ["apple", "smart-tv", "console"]      # or ["all"]\n')
         for profile in DEVICE_PROFILES:
@@ -714,7 +714,7 @@ def command_compat(args: argparse.Namespace, cfg: Config) -> int:
             return 0
 
         print(f"{name}: not treated as essential.")
-        print("  It is filtered by the normal rules -- `wifiguard check` says how.")
+        print("  It is filtered by the normal rules -- `symbivpn check` says how.")
         return 0
 
     if command == "scan":
@@ -737,7 +737,7 @@ def command_compat(args: argparse.Namespace, cfg: Config) -> int:
     active = [p for p in DEVICE_PROFILES if p.key in guard.profiles or "all" in guard.profiles]
     print(f"\n  Device profiles ({len(active)} of {len(DEVICE_PROFILES)} active)")
     if not active:
-        print("    none -- run `wifiguard compat devices` to see what is available")
+        print("    none -- run `symbivpn compat devices` to see what is available")
     for profile in active:
         print(f"    [on ] {profile.key:<20} {len(profile.domains):>3} domains  {profile.title}")
 
@@ -752,11 +752,11 @@ def _compat_scan(cfg: Config, guard, limit: int) -> int:
     try:
         queries = _api(cfg, f"/api/queries?limit={limit}&action=block").get("queries", [])
     except NotRunning as exc:
-        print(f"WiFiGuard does not appear to be running ({exc}).", file=sys.stderr)
+        print(f"SymbiVPN does not appear to be running ({exc}).", file=sys.stderr)
         print("The scan reads the live query log, so start it first.", file=sys.stderr)
         return 1
     except (ApiError, Ambiguous) as exc:
-        print(f"WiFiGuard is running, but {exc}", file=sys.stderr)
+        print(f"SymbiVPN is running, but {exc}", file=sys.stderr)
         return 1
 
     # Words that show up in the names of services devices depend on. This is a
@@ -799,9 +799,9 @@ def _compat_scan(cfg: Config, guard, limit: int) -> int:
 
     print("If a device on this network misbehaves, allow the matching name:")
     example = next(iter(next(iter(flagged.values())).most_common(1)))[0]
-    print(f"  wifiguard allow {example}")
+    print(f"  symbivpn allow {example}")
     print("\nOr add the device's profile, which covers the whole class at once:")
-    print("  wifiguard compat devices")
+    print("  symbivpn compat devices")
     return 0
 
 
@@ -838,9 +838,9 @@ def command_cluster(args: argparse.Namespace, cfg: Config) -> int:
             print('  address = "10.9.0.1"     # this node, as peers reach it')
             print('  peers   = ["10.9.0.2"]   # the other nodes')
             print("  priority = 50            # higher wins; give the always-on device more")
-            print("\nGenerate the shared secret with `wifiguard cluster secret`.")
+            print("\nGenerate the shared secret with `symbivpn cluster secret`.")
             return 0
-        print("WiFiGuard is not running, so live peer state is unavailable.", file=sys.stderr)
+        print("SymbiVPN is not running, so live peer state is unavailable.", file=sys.stderr)
         print(f"Configured: {cfg.cluster.name or 'this host'} "
               f"priority {cfg.cluster.priority}, peers {', '.join(cfg.cluster.peers) or 'none'}")
         return 1
@@ -878,7 +878,7 @@ def command_tls(args: argparse.Namespace, cfg: Config) -> int:
         return 1
 
     print(f"{args.hostname} public-key pin:\n  {pin}\n")
-    print("Add it to wifiguard.toml as:")
+    print("Add it to symbivpn.toml as:")
     print("  [upstream.pins]")
     print(f'  "{args.hostname}" = ["{pin}"]')
     print()
@@ -919,7 +919,7 @@ def command_passwd(args: argparse.Namespace, cfg: Config) -> int:
         return 1
 
     print()
-    print("Put this in wifiguard.toml:")
+    print("Put this in symbivpn.toml:")
     print()
     print("  [dashboard]")
     print(f'  password = "{hash_password(password)}"')
@@ -942,10 +942,10 @@ def command_harden(args: argparse.Namespace, cfg: Config) -> int:
     if cfg.dashboard.enabled and not looks_local(cfg.dashboard.address):
         if not cfg.dashboard.password:
             note("high", "The dashboard is on the network with no password.",
-                 "Set one: wifiguard passwd")
+                 "Set one: symbivpn passwd")
         elif not is_hashed(cfg.dashboard.password):
             note("medium", "The dashboard password is stored in the clear.",
-                 "Replace it with a hash: wifiguard passwd")
+                 "Replace it with a hash: symbivpn passwd")
     if cfg.dashboard.enabled and cfg.dashboard.allow_insecure:
         note("high", "dashboard.allow_insecure is on, which waives the password check.",
              "Remove it and set a password instead.")
@@ -971,7 +971,7 @@ def command_harden(args: argparse.Namespace, cfg: Config) -> int:
         note("low", "No resolver public keys are pinned.",
              "Certificate verification alone cannot see through an interception "
              "whose CA your machine trusts. Capture pins on a network you trust: "
-             "wifiguard tls pin dns.quad9.net")
+             "symbivpn tls pin dns.quad9.net")
     if cfg.upstream.tls_profile == "compatible":
         note("low", "TLS profile is 'compatible', which allows TLS 1.2.",
              "Use 'strict', or 'paranoid' to require TLS 1.3.")

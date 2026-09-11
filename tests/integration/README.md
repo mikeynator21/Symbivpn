@@ -1,6 +1,6 @@
 # Integration testbed
 
-`wifiguard selftest` runs everything in one process on loopback. That proves the
+`symbivpn selftest` runs everything in one process on loopback. That proves the
 logic, but it cannot prove the parts that only exist once the kernel is
 involved: whether nftables actually accepts the ruleset, whether a DHCP
 broadcast reaches the server, whether the DNS redirect really catches a device
@@ -17,7 +17,7 @@ This builds a virtual network out of Linux network namespaces and tests those.
     └───────────────┬────────────────┘
                     │ uplink 10.200.0.0/24
     ┌───────────────┴────────────────┐
-    │ ns: gateway   (WiFiGuard)      │  resolver :53, DHCP :67,
+    │ ns: gateway   (SymbiVPN)      │  resolver :53, DHCP :67,
     │   up0 10.200.0.1               │  real nftables ruleset
     │   ap0 10.42.7.1  (bridge)      │
     │   gp0 10.60.0.1  (2nd network) │
@@ -30,7 +30,7 @@ This builds a virtual network out of Linux network namespaces and tests those.
 ```
 
 Each namespace has its own interfaces, routing table and firewall, so as far as
-WiFiGuard is concerned these are separate machines.
+SymbiVPN is concerned these are separate machines.
 
 ## Running it
 
@@ -50,7 +50,7 @@ sudo python3 tests/integration/topology.py down    # clean up
 
 ## What it proves
 
-The clients are ordinary tools that know nothing about WiFiGuard's internals —
+The clients are ordinary tools that know nothing about SymbiVPN's internals —
 `dig` for DNS, a DHCP client written separately from the RFC, raw sockets for
 the firewall probes. If the server were tested with its own parser, a shared
 misunderstanding of the protocol would pass unnoticed.
@@ -58,7 +58,7 @@ misunderstanding of the protocol would pass unnoticed.
 | Area | What is actually exercised |
 |---|---|
 | Gateway start-up | Forwarding turned on, ruleset accepted by the kernel |
-| DHCP | A real broadcast handshake; the lease names WiFiGuard for DNS and routing; the hostname reaches the policy engine |
+| DHCP | A real broadcast handshake; the lease names SymbiVPN for DNS and routing; the hostname reaches the policy engine |
 | Filtering | Blocked, wildcard, allowlisted and permitted names, from a client that was told nothing |
 | Bandwidth | Repeat lookups produce zero upstream queries; blocked names never reach the far side at all |
 | **Bypass** | A device with a hardcoded `8.8.8.8` is answered by us anyway; DoT is refused in milliseconds; a routed public DoH address is rejected |

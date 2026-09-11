@@ -9,7 +9,7 @@ A filter listening on a single address quietly misses the rest.
 
 ## Discovery
 
-WiFiGuard finds every private network its host is attached to and serves them
+SymbiVPN finds every private network its host is attached to and serves them
 all. Turn it on by binding `auto`:
 
 ```toml
@@ -22,13 +22,13 @@ discover_local = true
 
 `auto` resolves at start-up to loopback plus every local address the host
 holds. Discovery also widens `server.allowed_networks` to cover the subnets it
-finds — only ever private ranges, so it can never turn WiFiGuard into an open
+finds — only ever private ranges, so it can never turn SymbiVPN into an open
 resolver.
 
 See what it found:
 
 ```console
-$ wifiguard gateway status
+$ symbivpn gateway status
   interfaces
     eth0         wired     up    192.168.1.10
     wlan0        wireless  up    192.168.4.22
@@ -73,7 +73,7 @@ group = "default"
 
 ## Getting the devices to use it
 
-The subnets have to be *pointed* at WiFiGuard, and how depends on the router:
+The subnets have to be *pointed* at SymbiVPN, and how depends on the router:
 
 **One DHCP scope for everything** — the common case on consumer boxes. Set the
 DNS server once in the router's DHCP settings.

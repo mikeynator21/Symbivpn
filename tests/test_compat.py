@@ -6,21 +6,21 @@ import time
 import unittest
 from pathlib import Path
 
-from wifiguard import compat, dnsmsg
-from wifiguard.blocklist import BlocklistManager
-from wifiguard.cache import CacheConfig, CacheKey, DNSCache
-from wifiguard.compat import CompatibilityGuard
-from wifiguard.config import ConfigError, from_mapping
-from wifiguard.engine import EngineConfig, FilterEngine
-from wifiguard.gateway.timeserver import (
+from symbivpn import compat, dnsmsg
+from symbivpn.blocklist import BlocklistManager
+from symbivpn.cache import CacheConfig, CacheKey, DNSCache
+from symbivpn.compat import CompatibilityGuard
+from symbivpn.config import ConfigError, from_mapping
+from symbivpn.engine import EngineConfig, FilterEngine
+from symbivpn.gateway.timeserver import (
     MODE_CLIENT,
     TimeServer,
     from_ntp_timestamp,
     to_ntp_timestamp,
 )
-from wifiguard.policy import Group, PolicyEngine
-from wifiguard.resolver import UpstreamPool, _build_upstream_query
-from wifiguard.stats import QueryLog
+from symbivpn.policy import Group, PolicyEngine
+from symbivpn.resolver import UpstreamPool, _build_upstream_query
+from symbivpn.stats import QueryLog
 
 
 class GuardTests(unittest.TestCase):
@@ -142,7 +142,7 @@ class EnginePrecedenceTests(unittest.TestCase):
     def test_a_bedtime_schedule_cannot_take_away_ntp(self):
         from datetime import time as clock_time
 
-        from wifiguard.policy import Schedule
+        from symbivpn.policy import Schedule
 
         group = Group(
             "default",

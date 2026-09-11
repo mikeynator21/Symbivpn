@@ -13,14 +13,14 @@ import time
 import unittest
 from pathlib import Path
 
-from wifiguard import dnsmsg
-from wifiguard.blocklist import BlocklistManager
-from wifiguard.cache import CacheConfig, DNSCache
-from wifiguard.engine import EngineConfig, FilterEngine
-from wifiguard.policy import Group, PolicyEngine
-from wifiguard.resolver import UpstreamPool
-from wifiguard.server import DNSServer, RateLimiter, ServerConfig
-from wifiguard.stats import QueryLog
+from symbivpn import dnsmsg
+from symbivpn.blocklist import BlocklistManager
+from symbivpn.cache import CacheConfig, DNSCache
+from symbivpn.engine import EngineConfig, FilterEngine
+from symbivpn.policy import Group, PolicyEngine
+from symbivpn.resolver import UpstreamPool
+from symbivpn.server import DNSServer, RateLimiter, ServerConfig
+from symbivpn.stats import QueryLog
 
 
 def free_port() -> int:

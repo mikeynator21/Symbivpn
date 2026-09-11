@@ -1,6 +1,6 @@
 """TLS hardening for the encrypted-DNS channel.
 
-Every query WiFiGuard cannot answer locally travels this channel, so it is worth
+Every query SymbiVPN cannot answer locally travels this channel, so it is worth
 configuring properly rather than accepting the defaults:
 
 * **TLS 1.3 preferred, 1.2 the floor.** 1.3 removes renegotiation, static-RSA
@@ -184,7 +184,7 @@ def _extract_spki(der_certificate: bytes) -> bytes:
 def fetch_pin(hostname: str, port: int = 443, timeout: float = 10.0) -> str:
     """Connect to a host and report its current SPKI pin.
 
-    Used by `wifiguard tls pin <host>` so pins can be captured from a trusted
+    Used by `symbivpn tls pin <host>` so pins can be captured from a trusted
     network rather than transcribed by hand.
     """
     import socket

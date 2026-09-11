@@ -24,13 +24,13 @@ whether a network works. Block the probe and the device concludes the network
 is broken: it shows a warning, refuses to stay connected, or falls back to
 mobile data.
 
-WiFiGuard treats these as **essential**. They are allowed ahead of every
+SymbiVPN treats these as **essential**. They are allowed ahead of every
 blocklist, every category, every group rule and every schedule, and it takes an
 explicit configuration change to block them. They carry no advertising and no
 tracking, which is what makes this a safe default rather than a hole.
 
 ```console
-$ wifiguard compat check pool.ntp.org
+$ symbivpn compat check pool.ntp.org
 pool.ntp.org: PROTECTED -- Network time (NTP)
 
   A device with the wrong clock rejects every TLS certificate as not yet
@@ -45,7 +45,7 @@ phone that stops receiving messages, or a factory-reset device that cannot
 finish setup, gets blamed on the network and is not worth the trade.
 
 ```console
-$ wifiguard compat
+$ symbivpn compat
 Protecting 126 domains that devices break without.
 
   Essential services
@@ -59,7 +59,7 @@ Protecting 126 domains that devices break without.
 
 ## How often does this actually bite?
 
-Worth measuring rather than asserting. Against the six blocklists WiFiGuard
+Worth measuring rather than asserting. Against the six blocklists SymbiVPN
 ships with — 455,686 rules — exactly **one** of the 126 essential domains is
 blocked:
 
@@ -104,7 +104,7 @@ names** — there is no way to say "use pool.ntp.org". Resolving the pool at
 start-up and handing out whatever came back is fragile, because those addresses
 rotate while a lease can last days.
 
-So WiFiGuard serves time itself. Clients get the gateway's address, which is
+So SymbiVPN serves time itself. Clients get the gateway's address, which is
 stable, always reachable, works while the uplink is down, and keeps working
 even if something upstream is swallowing NTP.
 
@@ -122,7 +122,7 @@ vectors, are refused.
 
 ## Devices that validate DNSSEC themselves
 
-By default WiFiGuard does not request DNSSEC records: the upstream resolver
+By default SymbiVPN does not request DNSSEC records: the upstream resolver
 validates and we read its AD bit, which is the same guarantee for a fraction of
 the bytes.
 
@@ -150,7 +150,7 @@ devices = ["apple", "smart-tv", "console"]     # or ["all"]
 ```
 
 ```console
-$ wifiguard compat devices
+$ symbivpn compat devices
   [   ] apple            iPhone, iPad, Mac, Apple TV, HomePod
          Sync, FaceTime, iMessage and AirPlay. Apple's ad and analytics hosts are not included.
          14 domains
@@ -167,14 +167,14 @@ and app store; its viewing-habit collection stays blocked.
 Start with the domain:
 
 ```bash
-wifiguard check the-thing-that-broke.com
+symbivpn check the-thing-that-broke.com
 ```
 
 If a whole device is misbehaving and you don't know what it wants, look at what
 it has been denied:
 
 ```console
-$ wifiguard compat scan
+$ symbivpn compat scan
 Looked at 500 recent blocks. These may be breaking something:
 
   time
@@ -184,13 +184,13 @@ Looked at 500 recent blocks. These may be breaking something:
     firmware.mydevice-vendor.com           blocked 3x
 
 If a device on this network misbehaves, allow the matching name:
-  wifiguard allow ntp.mydevice-vendor.com
+  symbivpn allow ntp.mydevice-vendor.com
 ```
 
 The scan looks for names that pattern-match services devices depend on. It
 reports suspicions for a human to judge — it never allows anything on its own.
 
-And the blunt instrument, when you want to know whether WiFiGuard is the cause
+And the blunt instrument, when you want to know whether SymbiVPN is the cause
 at all: put the device in a group with filtering off, and see if the problem
 goes away.
 
@@ -228,7 +228,7 @@ link-local by design and stops dead at a router. Put the TV on one network and
 the phone on another — a guest SSID, a band that got its own subnet, an IoT
 VLAN — and they never see each other.
 
-WiFiGuard can bridge that gap:
+SymbiVPN can bridge that gap:
 
 ```toml
 [networks]
@@ -251,7 +251,7 @@ something anyone wants — and only the discovery protocols are forwarded, not
 multicast generally.
 
 ```console
-$ wifiguard gateway status
+$ symbivpn gateway status
   discovery sharing  mDNS, SSDP between ap0, gp0
                      412 packets reflected
 ```

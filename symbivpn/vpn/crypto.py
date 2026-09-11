@@ -1,7 +1,7 @@
 """X25519 key generation for WireGuard, in pure Python.
 
 WireGuard keys are X25519 keypairs, and generating them is the only piece of
-cryptography WiFiGuard performs itself -- the tunnel is handled by the kernel.
+cryptography SymbiVPN performs itself -- the tunnel is handled by the kernel.
 Implementing the scalar multiplication here (RFC 7748) keeps the whole tool
 dependency-free, so it installs on a Raspberry Pi or a phone under Termux with
 nothing but a Python interpreter.

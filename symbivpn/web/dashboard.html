@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WiFiGuard</title>
+<title>SymbiVPN</title>
 <style>
 :root {
   color-scheme: light dark;
@@ -101,7 +101,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 </head>
 <body>
 <header>
-  <h1>WiFiGuard</h1>
+  <h1>SymbiVPN</h1>
   <span class="badge" id="protection">—</span>
   <span class="badge" id="uptime">—</span>
   <span class="spacer"></span>
@@ -292,7 +292,7 @@ function renderPeers(peers) {
   container.innerHTML = "";
   if (!peers.length) {
     container.innerHTML = '<div class="muted">No peers yet. Add one with '
-      + '<code>wifiguard vpn add-peer phone --mobile</code>.</div>';
+      + '<code>symbivpn vpn add-peer phone --mobile</code>.</div>';
     return;
   }
   for (const peer of peers) {
@@ -433,7 +433,7 @@ async function tick() {
   } catch (error) {
     $("health").textContent = "unreachable";
     $("health").className = "badge down";
-    showError(`Cannot reach WiFiGuard: ${error.message}`);
+    showError(`Cannot reach SymbiVPN: ${error.message}`);
   }
 }
 

@@ -1,7 +1,7 @@
 """Tests for how the CLI classifies failures talking to the daemon.
 
 Getting this wrong is not cosmetic: reporting "not running" about a daemon that
-is running led `wifiguard allow` to write a rule locally and report success,
+is running led `symbivpn allow` to write a rule locally and report success,
 while the running daemon carried on blocking the name.
 """
 
@@ -12,8 +12,8 @@ import unittest
 import urllib.error
 from unittest import mock
 
-from wifiguard import cli
-from wifiguard.config import Config
+from symbivpn import cli
+from symbivpn.config import Config
 
 
 def _config():
@@ -122,7 +122,7 @@ class PortConflictMessageTests(unittest.TestCase):
     """The first thing most installs hit is something already on port 53."""
 
     def run_with(self, holder):
-        from wifiguard import config as config_module
+        from symbivpn import config as config_module
 
         error = io.StringIO()
         app = mock.Mock()
@@ -154,7 +154,7 @@ class PortConflictMessageTests(unittest.TestCase):
         self.assertIn("systemctl disable --now systemd-resolved", text)
 
     def test_a_failure_building_the_application_is_a_sentence_not_a_traceback(self):
-        from wifiguard import config as config_module
+        from symbivpn import config as config_module
 
         error = io.StringIO()
         args = mock.Mock(update=False, no_gateway=True, no_dashboard=True)

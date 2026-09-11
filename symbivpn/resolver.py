@@ -1,6 +1,6 @@
 """Upstream resolution over encrypted transports.
 
-Every query that WiFiGuard cannot answer from cache leaves the house, so the
+Every query that SymbiVPN cannot answer from cache leaves the house, so the
 transport matters twice over: for privacy (nobody between here and the resolver
 should see what the network looks up) and for bandwidth (a fresh TLS handshake
 per query would cost several round trips and a few kilobytes each time).
@@ -174,7 +174,7 @@ class DoHUpstream(Upstream):
             "Accept": "application/dns-message",
             "Content-Type": "application/dns-message",
             "Content-Length": str(len(body)),
-            "User-Agent": "WiFiGuard/1.0",
+            "User-Agent": "SymbiVPN/1.0",
         }
 
         # One retry: a pooled connection may have been closed by the far end

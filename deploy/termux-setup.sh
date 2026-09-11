@@ -1,10 +1,10 @@
 #!/data/data/com.termux/files/usr/bin/bash
 #
-# WiFiGuard on Android, under Termux. No root required.
+# SymbiVPN on Android, under Termux. No root required.
 #
 #   pkg install git
-#   git clone https://github.com/mikeynator21/Symbivpn wifiguard
-#   bash wifiguard/deploy/termux-setup.sh
+#   git clone https://github.com/mikeynator21/Symbivpn symbivpn
+#   bash symbivpn/deploy/termux-setup.sh
 #
 # What this gives you:
 #
@@ -29,36 +29,36 @@ raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
 PY
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PREFIX="$HOME/.wifiguard"
+PREFIX="$HOME/.symbivpn"
 STATEDIR="$PREFIX/state"
 mkdir -p "$PREFIX" "$STATEDIR"
 
 info "installing to $PREFIX"
-cp -r "$SOURCE_DIR/wifiguard" "$PREFIX/"
-python -m compileall -q "$PREFIX/wifiguard"
+cp -r "$SOURCE_DIR/symbivpn" "$PREFIX/"
+python -m compileall -q "$PREFIX/symbivpn"
 
 BINDIR="$PREFIX/bin"
 mkdir -p "$BINDIR"
-cat > "$BINDIR/wifiguard" <<LAUNCHER
+cat > "$BINDIR/symbivpn" <<LAUNCHER
 #!/data/data/com.termux/files/usr/bin/bash
 export PYTHONPATH="$PREFIX:\${PYTHONPATH:-}"
-export WIFIGUARD_STATE="$STATEDIR"
-exec python -m wifiguard.cli "\$@"
+export SYMBIVPN_STATE="$STATEDIR"
+exec python -m symbivpn.cli "\$@"
 LAUNCHER
-chmod +x "$BINDIR/wifiguard"
+chmod +x "$BINDIR/symbivpn"
 
 if ! grep -q "$BINDIR" "$HOME/.bashrc" 2>/dev/null; then
     echo "export PATH=\"$BINDIR:\$PATH\"" >> "$HOME/.bashrc"
 fi
 
-CONFIG="$PREFIX/wifiguard.toml"
+CONFIG="$PREFIX/symbivpn.toml"
 if [[ ! -f "$CONFIG" ]]; then
     info "writing $CONFIG"
     cat > "$CONFIG" <<'CONF'
-# WiFiGuard on Android (Termux). Unprivileged, so the resolver runs on a high
+# SymbiVPN on Android (Termux). Unprivileged, so the resolver runs on a high
 # port rather than 53.
 protection = "strict"
-state_dir = "~/.wifiguard/state"
+state_dir = "~/.symbivpn/state"
 
 [server]
 listen_addresses = ["127.0.0.1"]
@@ -96,24 +96,24 @@ retention_days = 1
 # address = "10.9.0.3"        # this phone's VPN address
 # peers = ["10.9.0.1"]        # the laptop
 # priority = 40
-# secret = "<wifiguard cluster secret>"
+# secret = "<symbivpn cluster secret>"
 CONF
 fi
 
 info "running the self-test"
-PYTHONPATH="$PREFIX" WIFIGUARD_STATE="$STATEDIR" python -m wifiguard.cli selftest --port 15353 | tail -4
+PYTHONPATH="$PREFIX" SYMBIVPN_STATE="$STATEDIR" python -m symbivpn.cli selftest --port 15353 | tail -4
 
 cat <<NEXT
 
-WiFiGuard is installed on this phone.
+SymbiVPN is installed on this phone.
 
-  Start it:      wifiguard -c $CONFIG run
+  Start it:      symbivpn -c $CONFIG run
   Keep it alive: termux-wake-lock   (before starting)
-  Check it:      wifiguard -c $CONFIG status
+  Check it:      symbivpn -c $CONFIG status
 
 Open a new Termux session, or run 'source ~/.bashrc', to get the command
 on your PATH.
 
 To keep it running after a reboot, install Termux:Boot and add:
-  ~/.termux/boot/wifiguard  ->  termux-wake-lock && $BINDIR/wifiguard -c $CONFIG run
+  ~/.termux/boot/symbivpn  ->  termux-wake-lock && $BINDIR/symbivpn -c $CONFIG run
 NEXT

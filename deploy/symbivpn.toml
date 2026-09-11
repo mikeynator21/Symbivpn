@@ -34,7 +34,7 @@ enabled = true
 # To reach it from another machine, either tunnel in:
 #     ssh -L 8080:127.0.0.1:8080 you@this-host
 # or expose it properly, with a password of your own:
-#     wifiguard passwd            # prints a hash to paste below
+#     symbivpn passwd            # prints a hash to paste below
 #     address = "0.0.0.0"
 #     password = "scrypt$..."
 address = "127.0.0.1"

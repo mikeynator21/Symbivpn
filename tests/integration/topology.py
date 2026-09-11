@@ -1,10 +1,10 @@
 """Builds a virtual network out of Linux network namespaces.
 
 Each namespace has its own interfaces, routing table and firewall, so as far as
-WiFiGuard is concerned these are separate machines. That is what makes this a
+SymbiVPN is concerned these are separate machines. That is what makes this a
 real test rather than a simulation: the DHCP handshake is a real broadcast on a
 real segment, the nftables redirect is enforced by the real kernel, and the
-clients are real DNS resolvers that know nothing about WiFiGuard's code.
+clients are real DNS resolvers that know nothing about SymbiVPN's code.
 
     ┌────────────────────────────────┐
     │ ns: internet                   │  stub authoritative DNS, DoH endpoint,
@@ -12,7 +12,7 @@ clients are real DNS resolvers that know nothing about WiFiGuard's code.
     └───────────────┬────────────────┘
                     │ uplink 10.200.0.0/24
     ┌───────────────┴────────────────┐
-    │ ns: gateway   (WiFiGuard)      │  resolver :53, DHCP :67, nftables
+    │ ns: gateway   (SymbiVPN)      │  resolver :53, DHCP :67, nftables
     │   up0 10.200.0.1               │  NAT + DNS redirect + bypass blocking
     │   ap0 10.42.7.1  (bridge)      │
     │   gp0 10.60.0.1  (2nd network) │
@@ -170,7 +170,7 @@ def build() -> None:
     # discoverable -- a machine sharing a connection always has one.
     ns(GATEWAY, "ip", "route", "add", "default", "via", INTERNET_ADDR)
 
-    # Forwarding is the gateway's job; the test asserts WiFiGuard turns it on,
+    # Forwarding is the gateway's job; the test asserts SymbiVPN turns it on,
     # so it is deliberately left off here.
 
 

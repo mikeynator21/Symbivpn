@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from wifiguard import blocklist
-from wifiguard.blocklist import BlocklistManager, DomainSet, parent_domains, parse_rules
+from symbivpn import blocklist
+from symbivpn.blocklist import BlocklistManager, DomainSet, parent_domains, parse_rules
 
 
 class ParentDomainTests(unittest.TestCase):
@@ -203,7 +203,7 @@ class ManagerTests(unittest.TestCase):
     def test_a_local_file_is_never_judged(self):
         # Shrinking a file on disk is its owner editing it.
         manager = BlocklistManager(self.root / "cache")
-        self.assertFalse(manager._has_collapsed("/etc/wifiguard/mylist.txt", 3, 5000))
+        self.assertFalse(manager._has_collapsed("/etc/symbivpn/mylist.txt", 3, 5000))
 
     def test_the_check_can_be_disabled(self):
         manager = BlocklistManager(self.root / "cache", collapse_threshold=0.0)

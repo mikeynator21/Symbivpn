@@ -103,7 +103,7 @@ def _list_interfaces_from_sysfs() -> list[Interface]:
     """Fallback for hosts without iproute2, using sysfs and ioctls.
 
     Android under Termux and minimal container images both lack `ip`, and both
-    are places WiFiGuard is expected to run, so this path is a real
+    are places SymbiVPN is expected to run, so this path is a real
     implementation rather than a stub.
     """
     interfaces = []

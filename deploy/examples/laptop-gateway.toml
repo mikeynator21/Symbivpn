@@ -17,7 +17,7 @@ port = 53
 
 [hotspot]
 enabled = true
-ssid = "WiFiGuard"
+ssid = "SymbiVPN"
 passphrase = "choose-a-long-passphrase"
 
 # Leave both empty and they are worked out live: the access point picks a
@@ -62,7 +62,7 @@ enabled = true
 address = "127.0.0.1"
 port = 8080
 
-# Uncomment once you have run `wifiguard vpn init --endpoint <your-address>`.
+# Uncomment once you have run `symbivpn vpn init --endpoint <your-address>`.
 # [vpn]
 # enabled = true
 # endpoint = "home.example.com"

@@ -2,10 +2,10 @@
 
 import unittest
 
-from wifiguard.auth import (
+from symbivpn.auth import (
     AttemptLimiter, hash_password, is_hashed, looks_local, verify_password,
 )
-from wifiguard.config import ConfigError, from_mapping
+from symbivpn.config import ConfigError, from_mapping
 
 
 class PasswordTests(unittest.TestCase):
@@ -111,7 +111,7 @@ class AdminTokenTests(unittest.TestCase):
         self.state = Path(self.tmp.name)
 
     def _token(self):
-        from wifiguard.auth import AdminToken
+        from symbivpn.auth import AdminToken
 
         return AdminToken(self.state)
 

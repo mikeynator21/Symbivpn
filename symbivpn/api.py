@@ -80,7 +80,7 @@ class Dashboard:
         elif self.config.password and not is_hashed(self.config.password):
             log.warning(
                 "dashboard.password is stored in the clear. Replace it with a hash: "
-                "run `wifiguard passwd` and paste the result into the config."
+                "run `symbivpn passwd` and paste the result into the config."
             )
         log.info("dashboard on http://%s:%d", self.config.address, self.config.port)
 
@@ -129,7 +129,7 @@ def _make_handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
     application = dashboard.app
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "WiFiGuard"
+        server_version = "SymbiVPN"
         sys_version = ""
         protocol_version = "HTTP/1.1"
 
@@ -216,7 +216,7 @@ def _make_handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
                 else HTTPStatus.UNAUTHORIZED
             )
             extra = {} if status == HTTPStatus.TOO_MANY_REQUESTS else {
-                "WWW-Authenticate": 'Basic realm="WiFiGuard"'
+                "WWW-Authenticate": 'Basic realm="SymbiVPN"'
             }
             self._send(status, json.dumps({"error": reason}).encode(), extra=extra)
             return False

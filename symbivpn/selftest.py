@@ -1,6 +1,6 @@
 """An end-to-end test of the running stack, with no root and no internet.
 
-`wifiguard selftest` starts a stub upstream resolver, a real FilterEngine and a
+`symbivpn selftest` starts a stub upstream resolver, a real FilterEngine and a
 real DNS listener on loopback, then queries them the way a phone or a laptop
 would. It is the honest answer to "did the install work?" -- everything below
 exercises the shipping code paths rather than mocks of them.
@@ -221,11 +221,11 @@ def build_test_stack(state_dir: Path, upstream: StubUpstream, port: int):
 def run_selftest(cfg: Config, port: int = 15353, keep: bool = False) -> int:
     """Run every check and print a report. Returns a process exit code."""
     report = Report()
-    state_dir = Path(tempfile.mkdtemp(prefix="wifiguard-selftest-"))
+    state_dir = Path(tempfile.mkdtemp(prefix="symbivpn-selftest-"))
     upstream = StubUpstream()
     upstream.start()
 
-    print(f"Running WiFiGuard self-test on 127.0.0.1:{port}")
+    print(f"Running SymbiVPN self-test on 127.0.0.1:{port}")
     print(f"  stub upstream: {upstream.spec}")
     print(f"  state:         {state_dir}\n")
 
@@ -711,7 +711,7 @@ def _check_gateway(report: Report) -> None:
             f"offered {offered}",
         )
         report.check(
-            "DHCP points clients at WiFiGuard for DNS",
+            "DHCP points clients at SymbiVPN for DNS",
             socket.inet_ntoa(dns_option[:4]) == "10.42.7.1" if dns_option else False,
             "this is what makes every joined device filtered",
         )

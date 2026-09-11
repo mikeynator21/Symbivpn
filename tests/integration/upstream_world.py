@@ -1,10 +1,10 @@
 """The far side of the uplink: a stub internet for the testbed.
 
-Runs inside the `internet` namespace and provides everything WiFiGuard would
+Runs inside the `internet` namespace and provides everything SymbiVPN would
 reach across the wire:
 
 * a plain DNS resolver on port 53,
-* a DNS-over-HTTPS endpoint on port 443, with a real certificate that WiFiGuard
+* a DNS-over-HTTPS endpoint on port 443, with a real certificate that SymbiVPN
   verifies properly (no verification is disabled anywhere for this test),
 * a TCP service on port 80, so NAT can be proved rather than assumed.
 
@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from wifiguard import dnsmsg  # noqa: E402
+from symbivpn import dnsmsg  # noqa: E402
 
 STATE_PATH = Path(os.environ.get("TESTBED_STATE", "/tmp/wgt-upstream.json"))
 

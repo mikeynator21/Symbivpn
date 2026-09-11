@@ -1,4 +1,4 @@
-"""Runs WiFiGuard as a gateway inside the testbed's gateway namespace.
+"""Runs SymbiVPN as a gateway inside the testbed's gateway namespace.
 
 This is `GatewayManager` with hostapd removed. Bringing up a real access point
 needs a radio, which no sandbox has, so the client segment is a bridge with
@@ -17,12 +17,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from wifiguard import config as config_module  # noqa: E402
-from wifiguard.app import Application  # noqa: E402
-from wifiguard.gateway import firewall  # noqa: E402
-from wifiguard.gateway.dhcp import DHCPConfig, DHCPServer  # noqa: E402
-from wifiguard.gateway.reflector import MulticastReflector  # noqa: E402
-from wifiguard.gateway.timeserver import TimeServer  # noqa: E402
+from symbivpn import config as config_module  # noqa: E402
+from symbivpn.app import Application  # noqa: E402
+from symbivpn.gateway import firewall  # noqa: E402
+from symbivpn.gateway.dhcp import DHCPConfig, DHCPServer  # noqa: E402
+from symbivpn.gateway.reflector import MulticastReflector  # noqa: E402
+from symbivpn.gateway.timeserver import TimeServer  # noqa: E402
 
 AP_INTERFACE = "ap0"
 UPLINK_INTERFACE = "up0"
@@ -33,7 +33,7 @@ GUEST_SUBNET = ipaddress.ip_network("10.60.0.0/24")
 
 def _uplink_subnet() -> str:
     """The subnet the uplink sits in, as the real gateway manager discovers it."""
-    from wifiguard.gateway import networks
+    from symbivpn.gateway import networks
 
     for local in networks.discover_local_networks():
         if local.interface == UPLINK_INTERFACE:

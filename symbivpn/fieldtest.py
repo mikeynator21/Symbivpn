@@ -1,12 +1,12 @@
 """Assess the network this machine is actually attached to.
 
-`selftest` proves WiFiGuard works. This asks a different question: what is
-*this* network doing to your DNS, and what will WiFiGuard change about it?
+`selftest` proves SymbiVPN works. This asks a different question: what is
+*this* network doing to your DNS, and what will SymbiVPN change about it?
 
 It runs before you install anything and answers the things worth knowing:
 whether the network intercepts port 53, whether it rewrites answers, whether
 encrypted DNS can get out at all, and whether TLS is being intercepted on the
-way. Every check reports what it found and what WiFiGuard does about it.
+way. Every check reports what it found and what SymbiVPN does about it.
 
 Nothing here modifies the system. It sends queries and opens connections, the
 same as any ordinary program would.
@@ -32,7 +32,7 @@ IMPOSSIBLE_RESOLVERS = ("203.0.113.99", "198.51.100.77", "192.0.2.123")
 #: Public resolvers to compare against each other.
 PUBLIC_RESOLVERS = (("Quad9", "9.9.9.9"), ("Cloudflare", "1.1.1.1"), ("Google", "8.8.8.8"))
 
-#: DoH endpoints to try, as WiFiGuard would use them.
+#: DoH endpoints to try, as SymbiVPN would use them.
 DOH_ENDPOINTS = (
     "https://dns.quad9.net/dns-query",
     "https://dns.cloudflare.com/dns-query",
@@ -56,7 +56,7 @@ PUBLIC_CA_ORGANISATIONS = (
 def _nonexistent_name() -> str:
     import secrets
 
-    return f"wifiguard-{secrets.token_hex(8)}-should-not-exist.invalid"
+    return f"symbivpn-{secrets.token_hex(8)}-should-not-exist.invalid"
 
 
 SEVERITY_ORDER = {"problem": 0, "warn": 1, "ok": 2, "info": 3}
@@ -86,7 +86,7 @@ class FieldReport:
         for finding in self.findings:
             counts[finding.severity] = counts.get(finding.severity, 0) + 1
         return {
-            "wifiguard_fieldtest": 1,
+            "symbivpn_fieldtest": 1,
             "summary": counts,
             "findings": [
                 {
@@ -204,8 +204,8 @@ def check_dns_interception(report: FieldReport) -> None:
             f"a reserved documentation range where no resolver can exist, so "
             f"something on the path is answering port 53 on its behalf -- every "
             f"lookup from this network is being seen, and can be changed.",
-            "WiFiGuard sends its queries over DNS-over-HTTPS on port 443 instead, "
-            "which this cannot read or rewrite. Run `wifiguard doctor` to confirm "
+            "SymbiVPN sends its queries over DNS-over-HTTPS on port 443 instead, "
+            "which this cannot read or rewrite. Run `symbivpn doctor` to confirm "
             "encrypted DNS gets out from here.",
         )
     else:
@@ -276,7 +276,7 @@ def check_nxdomain_hijack(report: FieldReport) -> None:
             f"A random .invalid name resolved to {', '.join(addresses)}. It should "
             f"have been NXDOMAIN. Redirecting failed lookups to a search or ads "
             f"page breaks software that relies on a lookup failing.",
-            "WiFiGuard passes NXDOMAIN through untouched, and encrypted upstream "
+            "SymbiVPN passes NXDOMAIN through untouched, and encrypted upstream "
             "stops the network substituting its own answer.",
         )
     elif rcode == dnsmsg.RCODE_NXDOMAIN:
@@ -318,7 +318,7 @@ def check_encrypted_dns(report: FieldReport) -> None:
             "doh", "problem",
             "DNS-over-HTTPS cannot get out from this network",
             "; ".join(f"{url.split('/')[2]}: {why}" for url, why in failures[:2]),
-            "Something here is blocking or terminating encrypted DNS. WiFiGuard "
+            "Something here is blocking or terminating encrypted DNS. SymbiVPN "
             "can fall back to plain DNS with `upstream.require_encrypted = false`, "
             "but on a network that does this, that is worth thinking about.",
         )
@@ -339,7 +339,7 @@ def check_encrypted_dns(report: FieldReport) -> None:
         report.add(
             "dot", "warn", "DNS-over-TLS (port 853) is blocked here",
             "No public resolver answered on 853.",
-            "Not a problem by itself -- WiFiGuard prefers DoH on 443. It does mean "
+            "Not a problem by itself -- SymbiVPN prefers DoH on 443. It does mean "
             "a device using Android Private DNS on this network will fail closed.",
         )
 
@@ -380,9 +380,9 @@ def check_tls_interception(report: FieldReport) -> None:
             f"Certificate verification still passes, because that CA is trusted by "
             f"this machine -- so nothing else would notice. The key presented is "
             f"{pin}.",
-            "Pin the resolver's real key so WiFiGuard refuses to resolve rather "
+            "Pin the resolver's real key so SymbiVPN refuses to resolve rather "
             "than talking through the interception. Capture the pin from a network "
-            "you trust: `wifiguard tls pin dns.quad9.net`.",
+            "you trust: `symbivpn tls pin dns.quad9.net`.",
         )
     elif clean:
         report.add(
@@ -460,7 +460,7 @@ def check_ipv6(report: FieldReport) -> None:
             "ipv6", "warn", "This network has working IPv6",
             "A device can reach an IPv6 resolver directly, which goes around any "
             "filtering that only covers IPv4.",
-            "In gateway mode WiFiGuard rejects client IPv6 by default so devices "
+            "In gateway mode SymbiVPN rejects client IPv6 by default so devices "
             "fall back to the filtered IPv4 path. Set hotspot.allow_ipv6 = true "
             "only once you have a filtered v6 path.",
         )

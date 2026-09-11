@@ -4,19 +4,19 @@ Two separate things, which are easy to confuse:
 
 1. **Keeping your phone filtered wherever it is** — on cellular, on a hotel's
    WiFi, on a friend's network. This works well and is the main event.
-2. **Running WiFiGuard on the phone itself**, as a second node that covers for
+2. **Running SymbiVPN on the phone itself**, as a second node that covers for
    your laptop when it sleeps. This works, with real limits, described below.
 
 ## 1. Filtered anywhere, over WireGuard
 
-Your phone connects back to a WiFiGuard node — the home hub, or your laptop —
+Your phone connects back to a SymbiVPN node — the home hub, or your laptop —
 and resolves through it from wherever it happens to be.
 
 On the node:
 
 ```bash
-sudo wifiguard vpn init --endpoint home.example.com
-sudo wifiguard vpn add-peer phone --mobile
+sudo symbivpn vpn init --endpoint home.example.com
+sudo symbivpn vpn add-peer phone --mobile
 ```
 
 That prints a QR code in the terminal. In the WireGuard app: **Add tunnel →
@@ -30,7 +30,7 @@ router.
 ### Choosing a profile
 
 ```bash
-wifiguard vpn add-peer phone --profile dns-only --mobile
+symbivpn vpn add-peer phone --profile dns-only --mobile
 ```
 
 | Profile | What goes through the tunnel | Use it when |
@@ -52,7 +52,7 @@ If you tether other devices to your phone, `--profile hotspot-relay` routes the
 tethering range back through the tunnel:
 
 ```bash
-wifiguard vpn add-peer phone-hotspot --profile hotspot-relay --mobile
+symbivpn vpn add-peer phone-hotspot --profile hotspot-relay --mobile
 ```
 
 Whether the tethered devices actually inherit the tunnel depends on the phone,
@@ -111,14 +111,14 @@ yield_when_idle = false
 secret = "..."
 ```
 
-Generate the secret once with `wifiguard cluster secret` and use the same value
+Generate the secret once with `symbivpn cluster secret` and use the same value
 on both. Without it, anything that can reach the port could inject cache
 entries, which is a DNS-poisoning primitive — so it is required, not optional.
 
 Check it:
 
 ```console
-$ wifiguard cluster status
+$ symbivpn cluster status
 This node: laptop (10.9.0.1)
   priority     90 (effective 1)
   state        yielding -- idle for 812s
@@ -139,15 +139,15 @@ Termux, no root:
 
 ```bash
 pkg install git
-git clone https://github.com/mikeynator21/Symbivpn wifiguard
-bash wifiguard/deploy/termux-setup.sh
+git clone https://github.com/mikeynator21/Symbivpn symbivpn
+bash symbivpn/deploy/termux-setup.sh
 ```
 
 Then:
 
 ```bash
 termux-wake-lock
-wifiguard -c ~/.wifiguard/wifiguard.toml run
+symbivpn -c ~/.symbivpn/symbivpn.toml run
 ```
 
 Install **Termux:Boot** to have it start after a reboot.

@@ -1,6 +1,6 @@
 [Unit]
-Description=WiFiGuard filtering resolver and gateway
-Documentation=https://github.com/mikeynator21/wifiguard
+Description=SymbiVPN filtering resolver and gateway
+Documentation=https://github.com/mikeynator21/Symbivpn
 After=network-online.target
 Wants=network-online.target
 # systemd-resolved wants port 53 for itself.
@@ -8,7 +8,7 @@ Conflicts=systemd-resolved.service
 
 [Service]
 Type=exec
-ExecStart=/usr/local/bin/wifiguard run
+ExecStart=/usr/local/bin/symbivpn run
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
@@ -37,9 +37,9 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service @network-io
 SystemCallErrorNumber=EPERM
 
-StateDirectory=wifiguard
-ConfigurationDirectory=wifiguard
-ReadWritePaths=/var/lib/wifiguard /etc/wireguard
+StateDirectory=symbivpn
+ConfigurationDirectory=symbivpn
+ReadWritePaths=/var/lib/symbivpn /etc/wireguard
 
 [Install]
 WantedBy=multi-user.target

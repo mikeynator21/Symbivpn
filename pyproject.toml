@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "wifiguard"
+name = "symbivpn"
 version = "1.0.0"
 description = "Network-wide ad blocker, encrypted DNS resolver and portable VPN gateway"
 readme = "README.md"
@@ -24,19 +24,19 @@ classifiers = [
     "Topic :: System :: Networking :: Firewalls",
 ]
 
-# Deliberately empty. WiFiGuard runs on the standard library alone, so it
+# Deliberately empty. SymbiVPN runs on the standard library alone, so it
 # installs on a Raspberry Pi, a router, or a phone under Termux without a
 # compiler or a package index.
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/mikeynator21/wifiguard"
+Homepage = "https://github.com/mikeynator21/Symbivpn"
 
 [project.scripts]
-wifiguard = "wifiguard.cli:main"
+symbivpn = "symbivpn.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["wifiguard*"]
+include = ["symbivpn*"]
 
 [tool.setuptools.package-data]
-wifiguard = ["web/*.html", "web/*.css", "web/*.js"]
+symbivpn = ["web/*.html", "web/*.css", "web/*.js"]

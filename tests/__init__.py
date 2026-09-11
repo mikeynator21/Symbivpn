@@ -1,4 +1,4 @@
-"""Test suite for WiFiGuard.
+"""Test suite for SymbiVPN.
 
 Logging is silenced here: several tests deliberately exercise failure paths
 (unreachable upstreams, corrupt cache files, invalid rules) whose warnings would

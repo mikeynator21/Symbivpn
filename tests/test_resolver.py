@@ -4,8 +4,8 @@ import socket
 import threading
 import unittest
 
-from wifiguard import dnsmsg
-from wifiguard.resolver import (
+from symbivpn import dnsmsg
+from symbivpn.resolver import (
     DoHUpstream,
     DoTUpstream,
     PlainUpstream,

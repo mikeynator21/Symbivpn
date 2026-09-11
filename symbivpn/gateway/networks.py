@@ -3,7 +3,7 @@
 A household rarely has one network. A typical all-in-one modem hands out a
 2.4GHz SSID, a 5GHz SSID, a guest SSID and a wired LAN, and depending on the
 box those are either one subnet or four. Devices land on whichever one they
-happened to join, and a filter that only listens on the subnet WiFiGuard's host
+happened to join, and a filter that only listens on the subnet SymbiVPN's host
 sits in quietly misses the rest.
 
 So rather than binding one address, this discovers every local network the host
@@ -231,7 +231,7 @@ def vpn_routed_networks(configured: list[str], *, discover: bool = True) -> list
 
 
 def summarise() -> str:
-    """A human-readable listing, for `wifiguard gateway status` and doctor."""
+    """A human-readable listing, for `symbivpn gateway status` and doctor."""
     networks = discover_local_networks(include_ipv6=True)
     if not networks:
         return "  no local networks found"

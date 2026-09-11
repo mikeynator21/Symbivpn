@@ -8,8 +8,8 @@ a probe which fails is reported rather than crashing the run.
 import unittest
 from unittest import mock
 
-from wifiguard import fieldtest
-from wifiguard.fieldtest import FieldReport, Finding
+from symbivpn import fieldtest
+from symbivpn.fieldtest import FieldReport, Finding
 
 
 class ReportTests(unittest.TestCase):
@@ -84,7 +84,7 @@ class JsonOutputTests(unittest.TestCase):
         json.loads(json.dumps(self._report().as_dict()))
 
     def test_carries_a_format_marker(self):
-        self.assertEqual(self._report().as_dict()["wifiguard_fieldtest"], 1)
+        self.assertEqual(self._report().as_dict()["symbivpn_fieldtest"], 1)
 
 
 class ProbeTests(unittest.TestCase):

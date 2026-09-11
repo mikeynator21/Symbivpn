@@ -1,9 +1,9 @@
 """End-to-end integration test against a virtual network.
 
-Unlike the unit tests and `wifiguard selftest`, which run everything in one
-process on loopback, this drives WiFiGuard from separate network stacks using
+Unlike the unit tests and `symbivpn selftest`, which run everything in one
+process on loopback, this drives SymbiVPN from separate network stacks using
 ordinary tools. The clients are real DNS resolvers that know nothing about
-WiFiGuard's internals, the DHCP handshake is a real broadcast, and the firewall
+SymbiVPN's internals, the DHCP handshake is a real broadcast, and the firewall
 is enforced by the kernel.
 
 Run as root:  sudo python3 tests/integration/run_testbed.py
@@ -189,7 +189,7 @@ block_categories = ["adult"]
 class Testbed:
     def __init__(self) -> None:
         self.state_dir = Path(tempfile.mkdtemp(prefix="wgt-state-"))
-        self.config_path = self.state_dir / "wifiguard.toml"
+        self.config_path = self.state_dir / "symbivpn.toml"
         self.upstream_process: subprocess.Popen | None = None
         self.gateway_process: subprocess.Popen | None = None
         self.guest_process: subprocess.Popen | None = None
@@ -229,7 +229,7 @@ class Testbed:
             if self.gateway_process.poll() is not None:
                 output = self.gateway_process.stdout.read() if self.gateway_process.stdout else ""
                 raise RuntimeError(f"the gateway exited during start-up:\n{output}")
-            if sh(topo.GATEWAY, "nft", "list", "tables").stdout.count("wifiguard"):
+            if sh(topo.GATEWAY, "nft", "list", "tables").stdout.count("symbivpn"):
                 time.sleep(1.5)  # Let the listeners finish binding.
                 return
             time.sleep(0.5)
@@ -256,8 +256,8 @@ class Testbed:
             except subprocess.TimeoutExpired:
                 self.gateway_process.kill()
             self.gateway_process = None
-        sh(topo.GATEWAY, "nft", "delete", "table", "ip", "wifiguard")
-        sh(topo.GATEWAY, "nft", "delete", "table", "inet", "wifiguard_filter")
+        sh(topo.GATEWAY, "nft", "delete", "table", "ip", "symbivpn")
+        sh(topo.GATEWAY, "nft", "delete", "table", "inet", "symbivpn_filter")
 
     def stop(self) -> None:
         self.stop_gateway()
@@ -288,18 +288,18 @@ def scenario_gateway_up(report: Report) -> None:
 
     forwarding = sh(topo.GATEWAY, "cat", "/proc/sys/net/ipv4/ip_forward").stdout.strip()
     report.check("kernel IP forwarding enabled", forwarding == "1",
-                 "was off before WiFiGuard started")
+                 "was off before SymbiVPN started")
 
     tables = sh(topo.GATEWAY, "nft", "list", "tables").stdout
-    report.check("nftables tables installed", "wifiguard" in tables,
+    report.check("nftables tables installed", "symbivpn" in tables,
                  tables.strip().replace("\n", ", "))
 
-    rules = sh(topo.GATEWAY, "nft", "list", "table", "ip", "wifiguard").stdout
+    rules = sh(topo.GATEWAY, "nft", "list", "table", "ip", "symbivpn").stdout
     report.check("DNS redirect rule present",
                  "dport 53" in rules and "redirect" in rules)
     report.check("NAT masquerade rule present", "masquerade" in rules)
 
-    filter_rules = sh(topo.GATEWAY, "nft", "list", "table", "inet", "wifiguard_filter").stdout
+    filter_rules = sh(topo.GATEWAY, "nft", "list", "table", "inet", "symbivpn_filter").stdout
     report.check("forward policy is drop", "policy drop" in filter_rules)
     report.check("DoT port rejected", "853" in filter_rules)
 
@@ -324,9 +324,9 @@ def scenario_dhcp(report: Report, testbed: Testbed) -> dict:
     import ipaddress
     in_range = ipaddress.ip_address(lease["address"]) in ipaddress.ip_network(topo.AP_NET)
     report.check("address is inside the client subnet", in_range, topo.AP_NET)
-    report.check("lease names WiFiGuard as the DNS server",
+    report.check("lease names SymbiVPN as the DNS server",
                  lease["dns"] == [topo.AP_ADDR], f"DNS = {lease['dns']}")
-    report.check("lease names WiFiGuard as the router",
+    report.check("lease names SymbiVPN as the router",
                  lease["router"] == [topo.AP_ADDR], f"router = {lease['router']}")
 
     configured = sh(topo.PHONE, "ip", "-brief", "addr", "show", "eth0").stdout
@@ -438,13 +438,13 @@ def scenario_routing(report: Report) -> None:
     report.check("client cannot reach hosts on the joined network", not connected,
                  f"{topo.INTERNET_ADDR}: {error or 'CONNECTED'} after {elapsed:.2f}s")
 
-    rules = sh(topo.GATEWAY, "nft", "list", "table", "inet", "wifiguard_filter").stdout
+    rules = sh(topo.GATEWAY, "nft", "list", "table", "inet", "symbivpn_filter").stdout
     report.check("isolation rule is against the uplink subnet",
                  "ip daddr 10.200.0.0/24 drop" in rules,
                  "written by subnet, so it is not shadowed by the accept below it")
 
     # Masquerade means the far side sees the gateway, never the client.
-    nat = sh(topo.GATEWAY, "nft", "list", "table", "ip", "wifiguard").stdout
+    nat = sh(topo.GATEWAY, "nft", "list", "table", "ip", "symbivpn").stdout
     report.check("client addresses are masqueraded",
                  f"ip saddr {topo.AP_NET}" in nat and "masquerade" in nat)
 
@@ -475,7 +475,7 @@ def scenario_encrypted_upstream(report: Report, testbed: Testbed) -> None:
     doh_url = f"https://{topo.INTERNET_ADDR}/dns-query"
 
     # Point the trust store at the test CA. Nothing disables verification
-    # anywhere: WiFiGuard has no option to, by design.
+    # anywhere: SymbiVPN has no option to, by design.
     testbed.env["SSL_CERT_FILE"] = str(CERT_DIR / "cert.pem")
     try:
         testbed.start_gateway(doh_url, require_encrypted=True, cold_cache=True)
@@ -501,7 +501,7 @@ def scenario_encrypted_upstream(report: Report, testbed: Testbed) -> None:
 
     # --- pinning ---------------------------------------------------------
     import ssl as ssl_module
-    from wifiguard.tlsutil import spki_pin
+    from symbivpn.tlsutil import spki_pin
 
     der = ssl_module.PEM_cert_to_DER_cert((CERT_DIR / "cert.pem").read_text())
     correct_pin = spki_pin(der)
@@ -730,11 +730,11 @@ def scenario_cross_network_discovery(report: Report, testbed: Testbed) -> None:
 def scenario_uplink_change(report: Report, testbed: Testbed) -> None:
     report.heading("The uplink moves (as it does on a laptop)")
 
-    from wifiguard.gateway import interfaces
+    from symbivpn.gateway import interfaces
 
     script = (
         "import sys; sys.path.insert(0, %r)\n"
-        "from wifiguard.gateway import interfaces\n"
+        "from symbivpn.gateway import interfaces\n"
         "print(interfaces.uplink_fingerprint())\n" % str(ROOT)
     )
     first = sh(topo.GATEWAY, "python3", "-c", script).stdout.strip()

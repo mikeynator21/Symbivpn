@@ -1,13 +1,13 @@
 """WireGuard peer management and configuration generation.
 
-WireGuard is the whole reason the protection travels: a phone with a WiFiGuard
+WireGuard is the whole reason the protection travels: a phone with a SymbiVPN
 profile is filtered on cellular, on a hotel network, and on a friend's WiFi,
 with no per-network setup.
 
 Cryptography is WireGuard's own and is not configurable -- ChaCha20-Poly1305 for
 the data, Curve25519 for key agreement, BLAKE2s for hashing, in a Noise IKpsk2
 handshake with rekeying every two minutes. The one meaningful choice is the
-optional pre-shared key, and WiFiGuard sets one on every peer by default: it
+optional pre-shared key, and SymbiVPN sets one on every peer by default: it
 costs nothing and means that traffic recorded today is not readable by an
 attacker who breaks Curve25519 later.
 """
@@ -112,7 +112,7 @@ class ServerConfig:
     subnet: ipaddress.IPv4Network = ipaddress.ip_network("10.9.0.0/24")
     listen_port: int = DEFAULT_LISTEN_PORT
     interface: str = "wg0"
-    #: The address peers are told to use for DNS: WiFiGuard itself.
+    #: The address peers are told to use for DNS: SymbiVPN itself.
     dns_address: str = ""
     #: Interface that carries traffic out to the internet, for the NAT rules.
     uplink_interface: str = ""
@@ -247,7 +247,7 @@ class WireGuardManager:
     def _require_server(self) -> ServerConfig:
         if self.store.server is None:
             raise WireGuardError(
-                "the VPN has not been set up yet -- run `wifiguard vpn init "
+                "the VPN has not been set up yet -- run `symbivpn vpn init "
                 "--endpoint <host-or-ip>` first"
             )
         return self.store.server
@@ -343,8 +343,8 @@ class WireGuardManager:
         uplink = server.uplink_interface or "%i"
 
         lines = [
-            "# WiFiGuard tunnel endpoint. Generated file -- edit the peer list",
-            "# with `wifiguard vpn add-peer` rather than by hand.",
+            "# SymbiVPN tunnel endpoint. Generated file -- edit the peer list",
+            "# with `symbivpn vpn add-peer` rather than by hand.",
             "[Interface]",
             f"Address = {server.address}/{server.subnet.prefixlen}",
             f"ListenPort = {server.listen_port}",
@@ -393,7 +393,7 @@ class WireGuardManager:
         allowed = _allowed_ips_for(peer.profile, server, self.local_networks)
 
         lines = [
-            f"# WiFiGuard :: {peer.name}",
+            f"# SymbiVPN :: {peer.name}",
             f"# {PROFILE_HELP[peer.profile]}",
             "[Interface]",
             f"PrivateKey = {peer.private_key}",

@@ -10,10 +10,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from wifiguard import setupwizard
-from wifiguard.auth import hash_password, is_hashed
-from wifiguard.config import from_mapping
-from wifiguard.setupwizard import Answers, render
+from symbivpn import setupwizard
+from symbivpn.auth import hash_password, is_hashed
+from symbivpn.config import from_mapping
+from symbivpn.setupwizard import Answers, render
 
 
 class RenderTests(unittest.TestCase):
@@ -156,11 +156,11 @@ class NextStepsMatchTheMachineTests(unittest.TestCase):
                 )
 
     def test_systemd_present(self):
-        self.assertIn("systemctl enable --now wifiguard", self.steps(True))
+        self.assertIn("systemctl enable --now symbivpn", self.steps(True))
 
     def test_systemd_absent(self):
         text = self.steps(False)
-        self.assertIn("sudo wifiguard run", text)
+        self.assertIn("sudo symbivpn run", text)
         self.assertNotIn("systemctl enable", text)
 
     def test_busy_port_advice_without_systemd_does_not_name_systemctl(self):

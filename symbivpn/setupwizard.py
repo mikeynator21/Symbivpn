@@ -1,4 +1,4 @@
-"""One command that gets WiFiGuard configured correctly.
+"""One command that gets SymbiVPN configured correctly.
 
 The failure mode this exists to prevent is a half-configured install: the
 resolver bound to the wrong address, the dashboard exposed without a password,
@@ -21,7 +21,7 @@ from pathlib import Path
 from . import auth
 from .compat import DEVICE_PROFILES
 
-DEFAULT_CONFIG_PATH = Path("/etc/wifiguard/wifiguard.toml")
+DEFAULT_CONFIG_PATH = Path("/etc/symbivpn/symbivpn.toml")
 
 
 @dataclass
@@ -108,7 +108,7 @@ def interview() -> Answers:
     answers = Answers()
 
     role = _ask(
-        "What do you want WiFiGuard to do?",
+        "What do you want SymbiVPN to do?",
         [
             ("network", "Protect every device on my network",
              "Runs here and serves DNS to the whole LAN. You point your router's "
@@ -134,7 +134,7 @@ def interview() -> Answers:
         answers.listen_addresses = ["auto"]
         answers.dashboard_address = "127.0.0.1"
         print("\n  The hotspot other devices will join:")
-        answers.hotspot_ssid = _prompt("network name (SSID)", "WiFiGuard")
+        answers.hotspot_ssid = _prompt("network name (SSID)", "SymbiVPN")
         while not answers.hotspot_passphrase:
             answers.hotspot_passphrase = _secret("passphrase (8+ characters)")
             if not answers.hotspot_passphrase:
@@ -199,8 +199,8 @@ def interview() -> Answers:
 def render(answers: Answers) -> str:
     """Turn the answers into a configuration file."""
     lines = [
-        "# WiFiGuard configuration, written by `wifiguard setup`.",
-        "# Every value here has a comment explaining it in `wifiguard init-config`.",
+        "# SymbiVPN configuration, written by `symbivpn setup`.",
+        "# Every value here has a comment explaining it in `symbivpn init-config`.",
         "",
         f'protection = "{answers.protection}"',
         "",
@@ -282,13 +282,13 @@ def next_steps(answers: Answers, path: Path) -> list[str]:
                 "       server.port in the config to a port that is free."
             )
 
-    steps.append("Check the machine is ready:  sudo wifiguard doctor")
+    steps.append("Check the machine is ready:  sudo symbivpn doctor")
     if systemd:
-        steps.append("Start it:                    sudo systemctl enable --now wifiguard")
+        steps.append("Start it:                    sudo systemctl enable --now symbivpn")
     else:
         # Termux, a container, WSL without systemd -- all documented places to
         # run this, and none of them can enable a unit.
-        steps.append("Start it:                    sudo wifiguard run")
+        steps.append("Start it:                    sudo symbivpn run")
 
     if answers.role == "network":
         steps.append(
@@ -304,12 +304,12 @@ def next_steps(answers: Answers, path: Path) -> list[str]:
     if answers.vpn_endpoint:
         steps.append(
             "Set up the tunnel and add your phone:\n"
-            f"       sudo wifiguard vpn init --endpoint {answers.vpn_endpoint}\n"
-            "       sudo wifiguard vpn add-peer phone --profile dns-only --mobile\n"
+            f"       sudo symbivpn vpn init --endpoint {answers.vpn_endpoint}\n"
+            "       sudo symbivpn vpn add-peer phone --profile dns-only --mobile\n"
             "       (scan the QR code it prints, in the WireGuard app)"
         )
 
-    steps.append("Confirm it works:            wifiguard selftest")
+    steps.append("Confirm it works:            symbivpn selftest")
     return steps
 
 
@@ -336,7 +336,7 @@ def _port_in_use(port: int) -> bool:
 def run(path: Path | None = None, force: bool = False) -> int:
     target = path or DEFAULT_CONFIG_PATH
 
-    print("WiFiGuard setup")
+    print("SymbiVPN setup")
     print("=" * 60)
     print("A few questions, then a working configuration. Nothing is changed")
     print("on this machine until you start the service.")

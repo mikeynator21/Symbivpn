@@ -11,9 +11,9 @@ import time
 import unittest
 from pathlib import Path
 
-from wifiguard.cluster import Cluster, ClusterConfig, IdleMonitor, NodeState
-from wifiguard.gateway import firewall, hotspot, networks, reflector
-from wifiguard.gateway.dhcp import (
+from symbivpn.cluster import Cluster, ClusterConfig, IdleMonitor, NodeState
+from symbivpn.gateway import firewall, hotspot, networks, reflector
+from symbivpn.gateway.dhcp import (
     DISCOVER,
     MAGIC_COOKIE,
     OPT_CLIENT_ID,
@@ -25,7 +25,7 @@ from wifiguard.gateway.dhcp import (
     DHCPServer,
     parse_packet,
 )
-from wifiguard.server import RateLimiter
+from symbivpn.server import RateLimiter
 
 SUBNET = ipaddress.ip_network("10.42.7.0/24")
 
@@ -133,7 +133,7 @@ class FirewallRuleTests(unittest.TestCase):
 
     def test_every_port_we_open_is_closed_against_the_joined_network(self):
         # The input chain accepts by default, so that whatever else the machine
-        # runs keeps working. That makes each port WiFiGuard opens one it must
+        # runs keeps working. That makes each port SymbiVPN opens one it must
         # also close: the cluster listener binds 0.0.0.0 and would otherwise
         # answer the hotel LAN.
         text = self.rules(local_udp_ports=[51821])
@@ -244,7 +244,7 @@ class RulesetSyntaxTests(unittest.TestCase):
         )
 
     def test_ruleset_valid_with_every_local_port_closed(self):
-        # The port sets grow with whatever else WiFiGuard has bound, so nft
+        # The port sets grow with whatever else SymbiVPN has bound, so nft
         # itself has to agree the resulting rule is still well formed.
         self._validate(
             firewall.build_ruleset(
@@ -410,7 +410,7 @@ class ReflectorTests(unittest.TestCase):
 class HotspotConfigTests(unittest.TestCase):
     def config(self, **overrides):
         settings = dict(
-            interface="wlan1", ssid="WiFiGuard", passphrase="a-long-passphrase",
+            interface="wlan1", ssid="SymbiVPN", passphrase="a-long-passphrase",
             subnet=SUBNET,
         )
         settings.update(overrides)
@@ -592,8 +592,8 @@ class ClusterTests(unittest.TestCase):
             Cluster(self.config(secret="")).start()
 
     def test_shared_cache_entry_must_match_its_question(self):
-        from wifiguard import dnsmsg
-        from wifiguard.cache import CacheConfig, DNSCache
+        from symbivpn import dnsmsg
+        from symbivpn.cache import CacheConfig, DNSCache
         import base64
 
         cache = DNSCache(CacheConfig())

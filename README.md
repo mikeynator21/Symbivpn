@@ -1,4 +1,4 @@
-# WiFiGuard
+# SymbiVPN
 
 A network-wide ad blocker, encrypted DNS resolver and portable VPN gateway.
 
@@ -14,7 +14,7 @@ without a compiler or a package index.
 
 ```
                          ┌─────────────────────────────┐
-  phones, TVs, consoles  │        WiFiGuard            │
+  phones, TVs, consoles  │        SymbiVPN            │
   laptops, guests    ───▶│                             │──── encrypted DNS ───▶
   (nothing installed)    │  :53     filtering resolver │     (DoH / DoT)
                          │  :8080   dashboard          │
@@ -56,10 +56,10 @@ the phone, and they cover for each other.
 ## Install
 
 ```bash
-git clone https://github.com/mikeynator21/Symbivpn wifiguard
-cd wifiguard
+git clone https://github.com/mikeynator21/Symbivpn symbivpn
+cd symbivpn
 sudo ./install.sh
-sudo wifiguard setup
+sudo symbivpn setup
 ```
 
 `setup` asks four questions — what you want protected, how much filtering, what
@@ -71,16 +71,16 @@ Nothing is compiled and nothing is fetched, so you can also just run it out of
 the clone without installing at all:
 
 ```bash
-python3 -m wifiguard.cli fieldtest
-python3 -m wifiguard.cli selftest
+python3 -m symbivpn.cli fieldtest
+python3 -m symbivpn.cli selftest
 ```
 
 Then check the machine is ready and prove the filtering works:
 
 ```bash
-wifiguard doctor      # is this machine set up correctly?
-wifiguard selftest    # does the filtering actually work? (no root needed)
-wifiguard fieldtest   # what is this network doing to my DNS right now?
+symbivpn doctor      # is this machine set up correctly?
+symbivpn selftest    # does the filtering actually work? (no root needed)
+symbivpn fieldtest   # what is this network doing to my DNS right now?
 ```
 
 `selftest` runs the real resolver, the real cache and the real firewall
@@ -95,16 +95,16 @@ cd deploy && docker compose up -d
 
 ## What is your network doing right now?
 
-Before installing anything, `wifiguard fieldtest` assesses the network this
+Before installing anything, `symbivpn fieldtest` assesses the network this
 machine is attached to. It needs no root and changes nothing.
 
 ```console
-$ wifiguard fieldtest
+$ symbivpn fieldtest
   [FAIL] This network intercepts DNS
            A query addressed to 203.0.113.99 was answered. That address is in a
            reserved documentation range where no resolver can exist, so
            something on the path is answering port 53 on its behalf.
-        -> WiFiGuard sends its queries over DNS-over-HTTPS on port 443 instead,
+        -> SymbiVPN sends its queries over DNS-over-HTTPS on port 443 instead,
         -> which this cannot read or rewrite.
 
   [FAIL] TLS on this network is being intercepted
@@ -112,7 +112,7 @@ $ wifiguard fieldtest
            which is not a public certificate authority. Certificate
            verification still passes, because that CA is trusted by this
            machine -- so nothing else would notice.
-        -> Pin the resolver's real key so WiFiGuard refuses to resolve rather
+        -> Pin the resolver's real key so SymbiVPN refuses to resolve rather
         -> than talking through the interception.
 ```
 
@@ -123,7 +123,7 @@ It checks whether port 53 is intercepted, whether answers are being rewritten,
 whether failed lookups are redirected to an ads page, whether encrypted DNS can
 get out, whether TLS is being re-signed on the way, whether a captive portal is
 in the way, and whether an unfiltered IPv6 path exists to leak around the
-filtering. Each finding says what WiFiGuard does about it.
+filtering. Each finding says what SymbiVPN does about it.
 
 ## Point your devices at it
 
@@ -158,7 +158,7 @@ household the ratio is better, because the repetition is higher.
 Watch it on the dashboard, or:
 
 ```bash
-wifiguard status
+symbivpn status
 ```
 
 ## Hardening
@@ -168,7 +168,7 @@ lose the network to whoever is standing on it:
 
 - **An exposed dashboard with no password.** Reaching it means being able to
   switch filtering off and add VPN peers, so binding it anywhere but localhost
-  requires a password. It is stored as an scrypt hash (`wifiguard passwd`), and
+  requires a password. It is stored as an scrypt hash (`symbivpn passwd`), and
   repeated failures lock the client out.
 - **Exception rules in downloaded blocklists.** An `@@||domain^` rule silently
   un-filters a name. A hijacked list source could use one to un-block whatever
@@ -185,7 +185,7 @@ cannot make a logged-in browser change your settings.
 To audit an existing install:
 
 ```console
-$ wifiguard harden
+$ symbivpn harden
   [HIGH  ] server.allowed_networks accepts the whole internet.
             This makes an open resolver, which will be found and abused.
             List only your own private ranges.
@@ -204,7 +204,7 @@ about the two things DNS filtering cannot do — see
 ## Holding the line
 
 A filter only works if devices actually use it. Modern clients try hard not to.
-WiFiGuard closes each route out:
+SymbiVPN closes each route out:
 
 - **Firefox's canary** (`use-application-dns.net`) is answered NXDOMAIN, which
   is the agreed signal for "this network filters DNS, don't bypass it".
@@ -232,14 +232,14 @@ and schedule:
 
 | | |
 |---|---|
-| **Time** | A device with the wrong clock rejects *every* TLS certificate, so nothing on it works. Cheap hardware has no battery-backed clock and is in that state after each power cut. WiFiGuard also **serves time itself**, because DHCP can only point at an address, never at a name like `pool.ntp.org`. |
+| **Time** | A device with the wrong clock rejects *every* TLS certificate, so nothing on it works. Cheap hardware has no battery-backed clock and is in that state after each power cut. SymbiVPN also **serves time itself**, because DHCP can only point at an address, never at a name like `pool.ntp.org`. |
 | **Certificate status** | OCSP and CRL lookups happen mid-handshake. Blocked, connections fail or stall for seconds each — experienced as "the internet is slow". |
 | **Connectivity checks** | Every OS probes a known URL to decide if a network works. Block it and the device shows a warning, refuses to stay connected, or falls back to mobile data. |
 
 Push notifications and device activation are protected on the same basis.
 
 ```console
-$ wifiguard compat check pool.ntp.org
+$ symbivpn compat check pool.ntp.org
 pool.ntp.org: PROTECTED -- Network time (NTP)
 
   A device with the wrong clock rejects every TLS certificate as not yet
@@ -258,7 +258,7 @@ function, without its telemetry. Opt in to the ones you own:
 devices = ["apple", "smart-tv", "console"]     # or ["all"]
 ```
 
-And when something breaks anyway, `wifiguard compat scan` reads the query log
+And when something breaks anyway, `symbivpn compat scan` reads the query log
 and flags recent blocks that look like they are breaking a device.
 [Full details](docs/compatibility.md).
 
@@ -297,7 +297,7 @@ group_by_network = { "192.168.4.0/24" = "guest" }
 Every ad blocker gets asked this. There is a direct answer:
 
 ```console
-$ wifiguard check ads.doubleclick.net
+$ symbivpn check ads.doubleclick.net
 ads.doubleclick.net: BLOCKED
   reason: blocklist
   rule:   *.doubleclick.net
@@ -308,7 +308,7 @@ ads.doubleclick.net: BLOCKED
 And to undo it:
 
 ```bash
-wifiguard allow ads.doubleclick.net    # takes effect immediately
+symbivpn allow ads.doubleclick.net    # takes effect immediately
 ```
 
 ## Documentation
@@ -325,7 +325,7 @@ wifiguard allow ads.doubleclick.net    # takes effect immediately
 ## Configuration
 
 ```bash
-wifiguard init-config > /etc/wifiguard/wifiguard.toml
+symbivpn init-config > /etc/symbivpn/symbivpn.toml
 ```
 
 Every setting has a working default, so an empty file is valid. Unknown keys
@@ -340,7 +340,7 @@ Three layers, each proving something the one below it cannot.
 
 ```bash
 python3 -m unittest discover -s tests -v      # 472 unit tests, no network needed
-wifiguard selftest                            # 55 checks, the real stack on loopback
+symbivpn selftest                            # 55 checks, the real stack on loopback
 sudo ./tests/integration/run.sh               # 66 checks on a virtual network
 ```
 
@@ -349,7 +349,7 @@ vectors, the QR encoder against the 32 published format strings plus a geometry
 cross-check on all 80 version/level combinations, and the firewall ruleset is
 validated by `nft` itself rather than by matching strings.
 
-**`wifiguard selftest`** runs the real resolver, cache, policy engine and DHCP
+**`symbivpn selftest`** runs the real resolver, cache, policy engine and DHCP
 server in one process against a stub upstream. No root, no internet. This is
 what to run after installing.
 

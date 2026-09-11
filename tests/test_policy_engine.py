@@ -8,19 +8,19 @@ import unittest
 from datetime import datetime, time as clock_time
 from pathlib import Path
 
-from wifiguard import config as config_module, dnsmsg
-from wifiguard.blocklist import BlocklistManager
-from wifiguard.cache import CacheConfig, CacheKey, DNSCache
-from wifiguard.config import ConfigError, from_mapping
-from wifiguard.engine import (
+from symbivpn import config as config_module, dnsmsg
+from symbivpn.blocklist import BlocklistManager
+from symbivpn.cache import CacheConfig, CacheKey, DNSCache
+from symbivpn.config import ConfigError, from_mapping
+from symbivpn.engine import (
     MAX_PREFETCH_THREADS,
     EngineConfig,
     FilterEngine,
     _is_private_reverse,
 )
-from wifiguard.policy import Device, Group, PolicyEngine, Schedule
-from wifiguard.resolver import UpstreamPool
-from wifiguard.stats import QueryLog
+from symbivpn.policy import Device, Group, PolicyEngine, Schedule
+from symbivpn.resolver import UpstreamPool
+from symbivpn.stats import QueryLog
 
 
 class ScheduleTests(unittest.TestCase):

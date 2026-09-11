@@ -1,6 +1,6 @@
 """A small DHCP server for the hotspot (RFC 2131).
 
-WiFiGuard ships its own rather than leaning on dnsmasq for two reasons: dnsmasq
+SymbiVPN ships its own rather than leaning on dnsmasq for two reasons: dnsmasq
 would want port 53 for itself, and handing out the resolver address is the one
 thing that must not be left to another program's configuration. A client that
 gets someone else's DNS server in its lease is a client that is not filtered.
@@ -95,7 +95,7 @@ class DHCPConfig:
     server_ip: str
     dns_servers: list[str] = field(default_factory=list)
     lease_seconds: int = 3600
-    domain: str = "wifiguard.lan"
+    domain: str = "symbivpn.lan"
     #: NTP servers handed to clients. A device that cannot set its clock
     #: rejects every TLS certificate, so this is not a nicety -- many IoT
     #: devices have no battery-backed clock and are useless without it.

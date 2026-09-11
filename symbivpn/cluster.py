@@ -1,4 +1,4 @@
-"""Running WiFiGuard on more than one device, so protection never stops.
+"""Running SymbiVPN on more than one device, so protection never stops.
 
 A laptop is a bad single point of failure: it sleeps, it goes in a bag, its
 battery runs out. A phone is always on. Running a node on each and letting them
@@ -170,7 +170,7 @@ class IdleMonitor:
 
 
 class Cluster:
-    """Heartbeats, node election and cache sharing between WiFiGuard nodes."""
+    """Heartbeats, node election and cache sharing between SymbiVPN nodes."""
 
     def __init__(
         self,

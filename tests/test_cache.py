@@ -7,8 +7,8 @@ import time
 import unittest
 from pathlib import Path
 
-from wifiguard import dnsmsg
-from wifiguard.cache import _MAGIC, CacheConfig, CacheKey, DNSCache, SingleFlight
+from symbivpn import dnsmsg
+from symbivpn.cache import _MAGIC, CacheConfig, CacheKey, DNSCache, SingleFlight
 
 
 def make_reply(name="example.com", ttl=300, address="1.2.3.4"):

@@ -202,7 +202,7 @@ class Application:
         self._maintenance.start()
 
         log.info(
-            "WiFiGuard is up: %d block rules, %d upstreams, listening on %s",
+            "SymbiVPN is up: %d block rules, %d upstreams, listening on %s",
             self.blocklists.rule_count,
             len(self.upstreams.upstreams),
             ", ".join(self.config.server.listen_addresses),
@@ -294,7 +294,7 @@ class Application:
 
     def status(self) -> dict[str, object]:
         payload: dict[str, object] = {
-            "version": __import__("wifiguard").__version__,
+            "version": __import__("symbivpn").__version__,
             "protection": self.config.protection,
             "uptime_seconds": int(time.time() - self.started_at) if self.started_at else 0,
             "counters": self.query_log.counters.as_dict(),
@@ -390,7 +390,7 @@ def build(config: Config) -> Application:
 
 
 def default_blocklist_sources(config: Config) -> list[str]:
-    """The sources that would be used, for `wifiguard status` and the docs."""
+    """The sources that would be used, for `symbivpn status` and the docs."""
     sources = config.effective_blocklists()
     if config.blocklists.block_doh_bypass:
         sources = sources + [f"(built-in) {len(blocklist_module.DOH_BOOTSTRAP_DOMAINS)} DoH bypass domains"]

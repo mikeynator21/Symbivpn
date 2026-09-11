@@ -3,7 +3,7 @@
 import struct
 import unittest
 
-from wifiguard import dnsmsg
+from symbivpn import dnsmsg
 
 
 class NameEncodingTests(unittest.TestCase):

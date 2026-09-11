@@ -30,12 +30,12 @@ from .tlsutil import TLSPolicy
 log = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATHS = [
-    Path("/etc/wifiguard/wifiguard.toml"),
-    Path.home() / ".config/wifiguard/wifiguard.toml",
-    Path("wifiguard.toml"),
+    Path("/etc/symbivpn/symbivpn.toml"),
+    Path.home() / ".config/symbivpn/symbivpn.toml",
+    Path("symbivpn.toml"),
 ]
 
-DEFAULT_STATE_DIR = Path(os.environ.get("WIFIGUARD_STATE", "/var/lib/wifiguard"))
+DEFAULT_STATE_DIR = Path(os.environ.get("SYMBIVPN_STATE", "/var/lib/symbivpn"))
 
 PROTECTION_LEVELS = ("standard", "strict", "paranoid")
 
@@ -68,7 +68,7 @@ class CompatibilitySettings:
 
 @dataclass
 class NetworkSettings:
-    """How WiFiGuard finds the other networks on the same router."""
+    """How SymbiVPN finds the other networks on the same router."""
 
     #: Widen `server.allowed_networks` to cover every private subnet this host
     #: is attached to. A modem with a 2.4GHz, a 5GHz and a guest SSID often
@@ -150,7 +150,7 @@ class VPNSettings:
 @dataclass
 class HotspotSettings:
     enabled: bool = False
-    ssid: str = "WiFiGuard"
+    ssid: str = "SymbiVPN"
     passphrase: str = ""
     #: Wireless interface to run the access point on. Empty means autodetect.
     interface: str = ""
@@ -188,7 +188,7 @@ class DashboardSettings:
     port: int = 8080
     #: Required before the dashboard may be reached from anywhere but this
     #: machine. Store a hash rather than the password itself -- generate one
-    #: with `wifiguard passwd`. A plaintext value still works and is warned
+    #: with `symbivpn passwd`. A plaintext value still works and is warned
     #: about.
     password: str = ""
     readonly: bool = False
@@ -407,7 +407,7 @@ def _validate(config: Config) -> None:
             f"dashboard.address is {config.dashboard.address!r}, which exposes the "
             f"dashboard to the network, but no dashboard.password is set. Anyone "
             f"who can reach it could switch filtering off or add a VPN peer.\n"
-            f"  Set a password:  wifiguard passwd\n"
+            f"  Set a password:  symbivpn passwd\n"
             f"  Or keep it local: dashboard.address = \"127.0.0.1\"\n"
             f"  Or accept the risk deliberately: dashboard.allow_insecure = true"
         )
@@ -556,15 +556,15 @@ def apply_protection(config: Config) -> Config:
 
 
 EXAMPLE_CONFIG = """\
-# WiFiGuard configuration.
+# SymbiVPN configuration.
 #
 # Every value below is a default; delete anything you do not want to change.
-# `wifiguard check <domain>` explains what these settings do to a given name.
+# `symbivpn check <domain>` explains what these settings do to a given name.
 
 # "standard", "strict" or "paranoid". strict adds malware and phishing lists;
 # paranoid additionally requires TLS 1.3 upstream and trims log retention.
 protection = "standard"
-state_dir = "/var/lib/wifiguard"
+state_dir = "/var/lib/symbivpn"
 
 [server]
 # Add the hotspot or LAN address here so other devices can use the resolver.
@@ -617,7 +617,7 @@ protect_essentials = true
 
 # Device classes on this network, so the minimum each needs to work is allowed:
 # apple, android, windows, smart-tv, console, voice-assistant, printer,
-# smart-home, streaming -- or "all". Run `wifiguard compat devices` to see them.
+# smart-home, streaming -- or "all". Run `symbivpn compat devices` to see them.
 devices = []
 
 # Carry a client's DNSSEC request upstream. Without this a device that
@@ -643,7 +643,7 @@ retention_days = 7
 # -- Turning this laptop into a portable gateway -----------------------------
 # [hotspot]
 # enabled = true
-# ssid = "WiFiGuard"
+# ssid = "SymbiVPN"
 # passphrase = "choose-something-long"
 # interface = ""            # autodetected
 # uplink = ""               # follows the default route as you change networks

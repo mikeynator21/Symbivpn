@@ -1,6 +1,6 @@
 """A minimal DHCP client, written from RFC 2131.
 
-Deliberately independent of WiFiGuard's DHCP code: if the server were tested
+Deliberately independent of SymbiVPN's DHCP code: if the server were tested
 with its own parser, a shared misunderstanding of the protocol would pass. This
 builds the packets by hand and reads the reply by hand.
 

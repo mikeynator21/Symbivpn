@@ -79,7 +79,7 @@ class EngineConfig:
     #: Answer queries for private zones locally instead of forwarding them.
     handle_local_zones: bool = True
     #: The suffix used for names learned from DHCP.
-    local_suffix: str = "wifiguard.lan"
+    local_suffix: str = "symbivpn.lan"
     #: Refuse ANY queries, which are only ever used for amplification.
     refuse_any: bool = True
     #: Serve an expired answer when upstream is unreachable.
@@ -496,7 +496,7 @@ class FilterEngine:
     def check(self, name: str, client_address: str = "0.0.0.0") -> dict[str, object]:
         """Explain what would happen to `name`, without resolving it.
 
-        Backs `wifiguard check <domain>` and the dashboard's "why was this
+        Backs `symbivpn check <domain>` and the dashboard's "why was this
         blocked?" box, which is the question every ad blocker gets asked.
         """
         name = name.strip(".").lower()

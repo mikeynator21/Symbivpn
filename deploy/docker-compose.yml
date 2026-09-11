@@ -1,17 +1,17 @@
-# The simplest way to run WiFiGuard on a home server or NAS.
+# The simplest way to run SymbiVPN on a home server or NAS.
 #
 #   docker compose up -d
-#   docker compose exec wifiguard wifiguard status
+#   docker compose exec symbivpn symbivpn status
 #
 # Then point your router's DHCP "DNS server" setting at this host, and every
 # device on every network behind that router is filtered.
 
 services:
-  wifiguard:
+  symbivpn:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    container_name: wifiguard
+    container_name: symbivpn
     restart: unless-stopped
 
     # Host networking so the resolver sees real client addresses. Without it
@@ -28,8 +28,8 @@ services:
       - no-new-privileges:true
 
     volumes:
-      - wifiguard-state:/var/lib/wifiguard
-      - ./wifiguard.toml:/etc/wifiguard/wifiguard.toml:ro
+      - symbivpn-state:/var/lib/symbivpn
+      - ./symbivpn.toml:/etc/symbivpn/symbivpn.toml:ro
       # Only needed when the VPN is in use.
       - /etc/wireguard:/etc/wireguard
 
@@ -37,7 +37,7 @@ services:
       net.ipv4.ip_forward: "1"
 
     environment:
-      WIFIGUARD_STATE: /var/lib/wifiguard
+      SYMBIVPN_STATE: /var/lib/symbivpn
 
 volumes:
-  wifiguard-state:
+  symbivpn-state:

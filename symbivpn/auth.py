@@ -144,7 +144,7 @@ class AdminToken:
 
     Hashing the dashboard password is right for a human typing it, and wrong
     for the CLI: it has only the hash, and a hash is not a password. Rather
-    than weaken the hashing or make `wifiguard status` prompt, the daemon
+    than weaken the hashing or make `symbivpn status` prompt, the daemon
     writes a token that anyone who could already read the config can read --
     which is the same trust boundary, expressed honestly.
     """

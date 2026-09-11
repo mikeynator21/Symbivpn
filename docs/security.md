@@ -1,6 +1,6 @@
 # Security
 
-What WiFiGuard protects, how, and — as importantly — what it does not.
+What SymbiVPN protects, how, and — as importantly — what it does not.
 
 ## The cryptography
 
@@ -11,14 +11,14 @@ be: ChaCha20-Poly1305 for data, Curve25519 for key agreement, BLAKE2s for
 hashing, HKDF for derivation, in a Noise IKpsk2 handshake that rekeys every two
 minutes.
 
-The one meaningful choice is the optional pre-shared key, and WiFiGuard sets
+The one meaningful choice is the optional pre-shared key, and SymbiVPN sets
 one on **every peer by default**. It costs nothing and adds a layer of
 symmetric secrecy on top of the X25519 handshake: traffic recorded today stays
 unreadable to an attacker who breaks Curve25519 later, which is the practical
 shape of the "harvest now, decrypt later" concern.
 
 Keys are generated with `wg` when it is installed. When it is not, the
-pure-Python X25519 in `wifiguard/vpn/crypto.py` is used instead, checked
+pure-Python X25519 in `symbivpn/vpn/crypto.py` is used instead, checked
 against the RFC 7748 test vectors in the test suite. That implementation is
 used only to generate keys from fresh randomness — never to process
 attacker-supplied points — because Python's integers are not constant-time.
@@ -39,19 +39,19 @@ Queries are **rebuilt** rather than forwarded, which strips EDNS Client Subnet
 and any other identifying option the client attached, and normalises the
 question so cache entries collapse.
 
-On DNSSEC: WiFiGuard does not request DNSSEC records. Asking for them would
+On DNSSEC: SymbiVPN does not request DNSSEC records. Asking for them would
 inflate every response with signatures it would then have to validate.
 Instead it requires an authenticated channel to a validating resolver and reads
 the AD bit — the same guarantee, at a fraction of the bytes. If you want
 end-to-end validation on this host, run a validating resolver locally and point
-WiFiGuard at it.
+SymbiVPN at it.
 
 ### Certificate pinning
 
 Opt-in, because a stale pin breaks resolution for the whole network:
 
 ```bash
-wifiguard tls pin dns.quad9.net
+symbivpn tls pin dns.quad9.net
 ```
 
 ```toml
@@ -108,9 +108,9 @@ private networks are ignored entirely — not refused, ignored, because replying
 at all confirms the port is open. Per-client token-bucket rate limiting is on
 by default.
 
-**The joined network reaching back in.** Every port WiFiGuard opens — the
+**The joined network reaching back in.** Every port SymbiVPN opens — the
 resolver, the dashboard, DHCP, the time server, the cluster listener — is
-dropped on the uplink interface. Only WiFiGuard's own ports are named, so
+dropped on the uplink interface. Only SymbiVPN's own ports are named, so
 whatever else the machine runs (ssh, say) keeps working; the point is that
 nothing *we* opened answers the hotel LAN. Clients on the hotspot reach the
 internet through that network without reaching the hosts on it.
@@ -152,7 +152,7 @@ application that ships its own resolver over HTTPS to an address not on the
 block list will bypass filtering. The firewall rules narrow this considerably;
 they do not close it.
 
-**Traffic content.** WiFiGuard sees names, not payloads. It is not a firewall,
+**Traffic content.** SymbiVPN sees names, not payloads. It is not a firewall,
 an IDS, or an antivirus.
 
 **A compromised device on your network.** Filtering DNS does not contain a
@@ -176,7 +176,7 @@ close to owning the network it protects. Accordingly:
   configuration load, not warned about, and waiving it takes an explicit
   `dashboard.allow_insecure = true`.
 - The password is stored as an **scrypt hash** (n=16384, r=8) — memory-hard, so
-  a stolen config cannot be attacked at GPU speed. `wifiguard passwd` generates
+  a stolen config cannot be attacked at GPU speed. `symbivpn passwd` generates
   one. A plaintext value still works so upgrades do not break, and is warned
   about at start-up.
 - Five failures in five minutes **locks that client out** for five minutes.
@@ -207,7 +207,7 @@ source that goes bad after you did.
 ## Auditing an install
 
 ```bash
-wifiguard harden
+symbivpn harden
 ```
 
 Reports weak settings by severity with the fix for each, and exits non-zero on
@@ -239,16 +239,16 @@ worth reading first:
 
 | | |
 |---|---|
-| `wifiguard/engine.py` | Every filtering decision, in the order they are made |
-| `wifiguard/resolver.py` | Upstream transports and response validation |
-| `wifiguard/tlsutil.py` | TLS hardening and pinning |
-| `wifiguard/gateway/firewall.py` | The complete nftables ruleset |
-| `wifiguard/vpn/crypto.py` | X25519 |
+| `symbivpn/engine.py` | Every filtering decision, in the order they are made |
+| `symbivpn/resolver.py` | Upstream transports and response validation |
+| `symbivpn/tlsutil.py` | TLS hardening and pinning |
+| `symbivpn/gateway/firewall.py` | The complete nftables ruleset |
+| `symbivpn/vpn/crypto.py` | X25519 |
 
 To see the exact firewall rules on a running gateway:
 
 ```bash
-sudo wifiguard gateway rules
+sudo symbivpn gateway rules
 ```
 
 And to watch the controls above being enforced by a real kernel against real

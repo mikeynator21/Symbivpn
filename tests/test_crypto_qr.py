@@ -2,7 +2,7 @@
 
 import unittest
 
-from wifiguard.vpn import crypto, qr
+from symbivpn.vpn import crypto, qr
 
 
 class X25519Tests(unittest.TestCase):
@@ -156,7 +156,7 @@ class QRStructureTests(unittest.TestCase):
         self.assertEqual(qr.reed_solomon(b"abc", 7), qr.reed_solomon(b"abc", 7))
 
     def test_mask_chosen_from_all_eight(self):
-        self.assertIn(qr.encode("wifiguard test payload").mask, range(8))
+        self.assertIn(qr.encode("symbivpn test payload").mask, range(8))
 
     def test_wireguard_config_fits(self):
         config = (

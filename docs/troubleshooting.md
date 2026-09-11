@@ -3,10 +3,10 @@
 Start here:
 
 ```bash
-wifiguard doctor      # is the machine set up correctly?
-wifiguard selftest    # does the filtering work? (no root, no internet needed)
-wifiguard fieldtest   # what is this network doing to my DNS?
-wifiguard status      # what is the running service doing?
+symbivpn doctor      # is the machine set up correctly?
+symbivpn selftest    # does the filtering work? (no root, no internet needed)
+symbivpn fieldtest   # what is this network doing to my DNS?
+symbivpn status      # what is the running service doing?
 ```
 
 `doctor` and `selftest` look inward: is this machine configured properly, and
@@ -29,7 +29,7 @@ sudo rm -f /etc/resolv.conf
 echo 'nameserver 127.0.0.1' | sudo tee /etc/resolv.conf
 ```
 
-`wifiguard doctor` names the process holding the port.
+`symbivpn doctor` names the process holding the port.
 
 **"Permission denied" binding port 53.** Ports below 1024 need root. Use
 `sudo`, or set `server.port` above 1024 and redirect 53 to it.
@@ -40,53 +40,53 @@ loudly instead of silently doing nothing.
 
 ## Nothing is being blocked
 
-**Check the device is actually using WiFiGuard.** This is the answer most of
+**Check the device is actually using SymbiVPN.** This is the answer most of
 the time.
 
 ```bash
 # From the device in question:
-dig @<wifiguard-address> ads.doubleclick.net +short     # expect 0.0.0.0
+dig @<symbivpn-address> ads.doubleclick.net +short     # expect 0.0.0.0
 dig ads.doubleclick.net +short                          # what it really uses
 ```
 
 If the first returns `0.0.0.0` and the second does not, the device is not
-asking WiFiGuard. Its DHCP lease has a different DNS server — renew it, or
+asking SymbiVPN. Its DHCP lease has a different DNS server — renew it, or
 check the router handed out the right one.
 
 **Check the rules loaded.**
 
 ```bash
-wifiguard blocklist show
+symbivpn blocklist show
 ```
 
-A first run with no internet has no rules yet: `wifiguard blocklist update`.
+A first run with no internet has no rules yet: `symbivpn blocklist update`.
 
 **Ask why.**
 
 ```bash
-wifiguard check <domain>
+symbivpn check <domain>
 ```
 
 ## A site is broken
 
 ```bash
-wifiguard check the-broken-site.com     # was it us?
-wifiguard allow the-broken-site.com     # takes effect immediately
+symbivpn check the-broken-site.com     # was it us?
+symbivpn allow the-broken-site.com     # takes effect immediately
 ```
 
 The dashboard's "most blocked" list has an **allow** button next to each entry,
 which is usually faster than the command line.
 
-If `check` says `allow` and the site is still broken, WiFiGuard is not the
+If `check` says `allow` and the site is still broken, SymbiVPN is not the
 cause.
 
 ## The network itself is interfering
 
 Some networks intercept DNS, rewrite answers, or re-sign TLS. On those,
-everything about WiFiGuard can be correct and results still look wrong.
+everything about SymbiVPN can be correct and results still look wrong.
 
 ```bash
-wifiguard fieldtest
+symbivpn fieldtest
 ```
 
 **"This network intercepts DNS"** — port 53 is being answered by the network
@@ -101,10 +101,10 @@ machine trusts, so certificate verification passes and nothing notices. Pin the
 resolver's real key, captured from a network you trust:
 
 ```bash
-wifiguard tls pin dns.quad9.net      # on a network you trust
+symbivpn tls pin dns.quad9.net      # on a network you trust
 ```
 
-Then WiFiGuard refuses to resolve through the interception instead of talking
+Then SymbiVPN refuses to resolve through the interception instead of talking
 through it.
 
 **"DNS-over-HTTPS cannot get out"** — the network blocks or terminates
@@ -149,7 +149,7 @@ guessing.
 ## Clients connect to the hotspot but have no internet
 
 ```bash
-wifiguard status          # is "uplink" set, and "firewall" active?
+symbivpn status          # is "uplink" set, and "firewall" active?
 ```
 
 **No uplink** — the laptop is not connected to anything itself.
@@ -170,26 +170,26 @@ the setting off.
   peer, or set `MTU = 1280` in the client config.
 
 ```bash
-wifiguard vpn list        # last handshake and bytes transferred per peer
+symbivpn vpn list        # last handshake and bytes transferred per peer
 ```
 
 ## Queries are slow
 
 ```bash
-wifiguard status          # look at the per-upstream latency
+symbivpn status          # look at the per-upstream latency
 ```
 
 The pool prefers the fastest healthy resolver automatically, so a slow one is
 usually already being avoided. If all of them are slow, the uplink is the
 problem.
 
-A cold cache is slow by definition. `cache_rate` in `wifiguard status` climbs
+A cold cache is slow by definition. `cache_rate` in `symbivpn status` climbs
 over the first hours; the cache is saved on shutdown so a restart does not
 start cold.
 
 ## Getting more detail
 
 ```bash
-sudo wifiguard --log-level DEBUG run
-sudo journalctl -u wifiguard -f
+sudo symbivpn --log-level DEBUG run
+sudo journalctl -u symbivpn -f
 ```

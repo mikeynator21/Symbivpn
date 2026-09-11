@@ -6,7 +6,7 @@
 # phone keeps that protection on cellular and on other people's WiFi.
 
 protection = "strict"
-state_dir = "/var/lib/wifiguard"
+state_dir = "/var/lib/symbivpn"
 
 [server]
 listen_addresses = ["auto"]
@@ -58,12 +58,12 @@ listen_port = 51820
 
 [dashboard]
 enabled = true
-# Exposing this to the LAN requires a password -- WiFiGuard refuses to start
+# Exposing this to the LAN requires a password -- SymbiVPN refuses to start
 # otherwise, because reaching the dashboard means being able to switch
-# filtering off. Generate the hash with `wifiguard passwd`.
+# filtering off. Generate the hash with `symbivpn passwd`.
 address = "0.0.0.0"
 port = 8080
-password = "scrypt$REPLACE$ME"    # wifiguard passwd
+password = "scrypt$REPLACE$ME"    # symbivpn passwd
 
 [logging]
 log_queries = true
