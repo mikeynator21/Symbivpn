@@ -2,7 +2,7 @@
 #
 # WiFiGuard installer for Linux (Debian, Ubuntu, Raspberry Pi OS, Fedora, Arch).
 #
-#   curl -fsSL https://raw.githubusercontent.com/mikeynator21/mikeynator21/HEAD/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/mikeynator21/Symbivpn/HEAD/install.sh | sudo bash
 #
 # or, from a clone:  sudo ./install.sh
 #
@@ -15,7 +15,7 @@ PREFIX="${PREFIX:-/opt/wifiguard}"
 BINDIR="${BINDIR:-/usr/local/bin}"
 CONFDIR="${CONFDIR:-/etc/wifiguard}"
 STATEDIR="${STATEDIR:-/var/lib/wifiguard}"
-REPO="${REPO:-https://github.com/mikeynator21/mikeynator21}"
+REPO="${REPO:-https://github.com/mikeynator21/Symbivpn}"
 
 info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33m warning:\033[0m %s\n' "$*" >&2; }
