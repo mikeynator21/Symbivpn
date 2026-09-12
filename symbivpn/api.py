@@ -37,6 +37,11 @@ log = logging.getLogger(__name__)
 WEB_ROOT = Path(__file__).parent / "web"
 MAX_BODY = 256 * 1024
 
+#: What an unexpected failure tells the caller. The real message goes to the
+#: log, where the operator can read it: exception text routinely carries file
+#: paths and configuration values, and the caller has no use for either.
+_INTERNAL_ERROR = "internal error; see the service log"
+
 
 class Dashboard:
     """Runs the HTTP server for one application instance."""
@@ -191,11 +196,17 @@ def _make_handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
                 self._error(HTTPStatus.FORBIDDEN, "the dashboard is in read-only mode")
                 return False
 
-            if write:
-                # A state-changing request must be JSON. A browser cannot send
-                # this content type cross-origin without a CORS preflight,
-                # which nothing here answers -- so a page on the local network
-                # cannot make a logged-in browser change settings on its behalf.
+            if write and self.command == "POST":
+                # A state-changing POST must be JSON. A form can only ever send
+                # the three "simple" content types, and anything else needs a
+                # CORS preflight, which nothing here answers -- so a page on the
+                # local network cannot make a logged-in browser change settings
+                # on its behalf.
+                #
+                # Only POST, because only POST can be a simple request. DELETE
+                # always needs a preflight, so it is already safe -- and a
+                # bodiless DELETE sends no Content-Type at all, which made the
+                # peer-removal endpoint answer 415 to every caller.
                 content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip()
                 if content_type != "application/json":
                     self._error(
@@ -248,9 +259,9 @@ def _make_handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
                 handler(query)
             except BrokenPipeError:
                 return
-            except Exception as exc:  # noqa: BLE001 - never leak a traceback
+            except Exception:  # noqa: BLE001 - never leak internals to the caller
                 log.exception("dashboard GET %s failed", path)
-                self._error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+                self._error(HTTPStatus.INTERNAL_SERVER_ERROR, _INTERNAL_ERROR)
 
         def do_HEAD(self) -> None:  # noqa: N802
             self.do_GET()
@@ -273,9 +284,9 @@ def _make_handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
                 self._error(HTTPStatus.CONFLICT, str(exc))
             except BrokenPipeError:
                 return
-            except Exception as exc:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 log.exception("dashboard POST %s failed", path)
-                self._error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+                self._error(HTTPStatus.INTERNAL_SERVER_ERROR, _INTERNAL_ERROR)
 
         def do_DELETE(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
@@ -292,9 +303,9 @@ def _make_handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
                 self._error(HTTPStatus.NOT_FOUND, f"no such endpoint: {path}")
             except WireGuardError as exc:
                 self._error(HTTPStatus.NOT_FOUND, str(exc))
-            except Exception as exc:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 log.exception("dashboard DELETE %s failed", path)
-                self._error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+                self._error(HTTPStatus.INTERNAL_SERVER_ERROR, _INTERNAL_ERROR)
 
         def _route_get(self, path: str) -> Callable[[dict], None] | None:
             routes: dict[str, Callable[[dict], None]] = {
@@ -437,8 +448,9 @@ def _make_handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
                     self._error(HTTPStatus.NOT_FOUND, f"unknown format {fmt!r}")
             except WireGuardError as exc:
                 self._error(HTTPStatus.NOT_FOUND, str(exc))
-            except qr.QRError as exc:
-                self._error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+            except qr.QRError:
+                log.exception("could not render a QR code for peer %r", name)
+                self._error(HTTPStatus.INTERNAL_SERVER_ERROR, _INTERNAL_ERROR)
 
         # -- write endpoints ----------------------------------------------
 

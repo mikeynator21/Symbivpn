@@ -115,6 +115,22 @@ whatever else the machine runs (ssh, say) keeps working; the point is that
 nothing *we* opened answers the hotel LAN. Clients on the hotspot reach the
 internet through that network without reaching the hosts on it.
 
+**The dashboard as an attack surface.** A state-changing POST must be
+`application/json`, which a form cannot send and which needs a CORS preflight
+nothing here answers — so a page on your network cannot make a logged-in
+browser change settings on its behalf. Failed logins are rate-limited per
+client and lock out. An unexpected failure tells the caller only that one
+happened; the detail goes to the log, because exception text routinely carries
+file paths and configuration values. Static files are served only from within
+the web root, checked after resolving symlinks.
+
+**A peer name as an injection vector.** The name a VPN peer is given is not
+just a label: it goes into the generated `.conf`, into the filename that config
+downloads as, and into a `Content-Disposition` header. A newline in it would
+place a line of its own directly above `[Interface]`. Names are therefore
+restricted to letters, digits, spaces and `. _ -`, validated once where peers
+are created, which is what keeps all three uses safe.
+
 **A guest device flooding the network it was separated from.** Reflection
 copies each discovery packet onto every other network, so it is a multiplier
 by design. Deduplication only catches an identical packet — changing one byte

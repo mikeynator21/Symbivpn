@@ -26,6 +26,8 @@ import struct
 import threading
 import time
 
+from ..server import RateLimiter
+
 log = logging.getLogger(__name__)
 
 NTP_PORT = 123
@@ -40,6 +42,11 @@ MODE_SERVER = 4
 #: time is worse than handing out none: the client would trust it and then fail
 #: every certificate check with no idea why.
 MINIMUM_PLAUSIBLE_TIME = 1_735_689_600  # 2025-01-01
+
+#: Requests per second per client. A well-behaved device asks every few
+#: minutes; anything near this is already far past needing the time.
+NTP_RATE = 10.0
+NTP_BURST = 40
 
 
 def to_ntp_timestamp(unix_time: float) -> bytes:
@@ -73,6 +80,11 @@ class TimeServer:
         self.reference = reference[:4].ljust(4, b"\0")
         self.served = 0
         self.refused = 0
+        self.rate_limited = 0
+        #: The same token bucket the resolver uses. A reply is the same size as
+        #: the request, so this is no amplifier -- but a device stuck in a retry
+        #: loop should not be able to spin this thread either.
+        self._limiter = RateLimiter(NTP_RATE, NTP_BURST)
 
         self._socket: socket.socket | None = None
         self._thread: threading.Thread | None = None
@@ -143,17 +155,25 @@ class TimeServer:
             except OSError:
                 return
 
-            received_at = time.time()
-            reply = self.build_reply(payload, received_at)
-            if reply is None:
-                self.refused += 1
-                continue
-
             try:
+                if not self._limiter.allow(peer[0]):
+                    self.rate_limited += 1
+                    continue
+
+                reply = self.build_reply(payload, time.time())
+                if reply is None:
+                    self.refused += 1
+                    continue
                 self._socket.sendto(reply, peer)
                 self.served += 1
             except OSError as exc:
                 log.debug("could not answer an NTP request from %s: %s", peer[0], exc)
+            except Exception:  # noqa: BLE001
+                # A device with no clock cannot reach a certificate, so this
+                # thread quietly dying is not a small failure -- and nothing a
+                # sender puts in a packet should be able to cause it.
+                self.refused += 1
+                log.debug("failed to answer an NTP request", exc_info=True)
 
     def build_reply(self, payload: bytes, received_at: float) -> bytes | None:
         """Build an SNTP response, or None if the request is not one."""
@@ -201,5 +221,6 @@ class TimeServer:
             "stratum": self.stratum,
             "requests_served": self.served,
             "requests_refused": self.refused,
+            "requests_rate_limited": self.rate_limited,
             "clock_plausible": self.clock_is_plausible,
         }

@@ -9,10 +9,12 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from symbivpn.cluster import Cluster, ClusterConfig, IdleMonitor, NodeState
-from symbivpn.gateway import firewall, hotspot, networks, reflector
+from symbivpn.gateway import firewall, hotspot, networks, reflector, timeserver
+from symbivpn.gateway.timeserver import TimeServer
 from symbivpn.gateway.dhcp import (
     DISCOVER,
     MAGIC_COOKIE,
@@ -926,6 +928,60 @@ class ReflectorRateLimitTests(unittest.TestCase):
         ref._reflect(reflector.MDNS, "wlan1", b"reflected back", "10.42.7.1")
         self.assertEqual(ref.stats.self_originated, 1)
         self.assertEqual(ref.stats.rate_limited, 0)
+
+
+class TimeServerRobustnessTests(unittest.TestCase):
+    """A device with no clock cannot reach a certificate, so this must stay up."""
+
+    def build(self):
+        return TimeServer("127.0.0.1", stratum=3)
+
+    def request(self, *, mode=3, version=4, length=48):
+        packet = bytearray(length)
+        if length:
+            packet[0] = (version << 3) | mode
+        return bytes(packet)
+
+    def test_an_ordinary_request_is_answered(self):
+        reply = self.build().build_reply(self.request(), time.time())
+        self.assertIsNotNone(reply)
+        self.assertEqual(len(reply), 48)
+        self.assertEqual(reply[0] & 0x07, 4, "mode 4 = server")
+
+    def test_modes_used_for_amplification_are_refused(self):
+        server = self.build()
+        for mode in (0, 1, 2, 4, 5, 6, 7):
+            with self.subTest(mode=mode):
+                self.assertIsNone(server.build_reply(self.request(mode=mode), time.time()))
+
+    def test_short_packets_are_refused(self):
+        server = self.build()
+        for length in range(0, 48):
+            with self.subTest(length=length):
+                self.assertIsNone(server.build_reply(self.request(length=length), time.time()))
+
+    def test_a_reply_is_never_larger_than_the_request(self):
+        # The property that keeps this from being an amplifier at all.
+        request = self.request()
+        reply = self.build().build_reply(request, time.time())
+        self.assertLessEqual(len(reply), len(request))
+
+    def test_a_flood_from_one_client_is_cut_off(self):
+        server = self.build()
+        allowed = sum(1 for _ in range(timeserver.NTP_BURST + 50)
+                      if server._limiter.allow("10.42.7.50"))
+        self.assertLessEqual(allowed, timeserver.NTP_BURST)
+
+    def test_a_quiet_client_is_unaffected_by_a_noisy_one(self):
+        server = self.build()
+        for _ in range(timeserver.NTP_BURST + 50):
+            server._limiter.allow("10.42.7.50")
+        self.assertTrue(server._limiter.allow("10.42.7.51"))
+
+    def test_the_clock_is_refused_when_it_is_obviously_wrong(self):
+        server = self.build()
+        with mock.patch.object(timeserver.time, "time", return_value=0.0):
+            self.assertIsNone(server.build_reply(self.request(), 0.0))
 
 
 if __name__ == "__main__":

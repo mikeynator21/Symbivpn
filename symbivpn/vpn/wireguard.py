@@ -18,6 +18,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -29,6 +30,13 @@ from typing import Literal
 from . import crypto, qr
 
 log = logging.getLogger(__name__)
+
+#: What a peer may be called. Deliberately narrow, because the name is not just
+#: a label: it goes into the generated .conf, into the filename that config is
+#: downloaded as, and into a Content-Disposition header. A newline in it injects
+#: a line into the config file ahead of [Interface]; a quote breaks out of the
+#: header. Validating once, here, is what keeps all three safe.
+PEER_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,63}$")
 
 Profile = Literal["full", "dns-only", "lan", "hotspot-relay"]
 
@@ -286,8 +294,12 @@ class WireGuardManager:
         server = self._require_server()
         if name in self.store.peers:
             raise WireGuardError(f"a peer named {name!r} already exists")
-        if not name or "/" in name or name.startswith("."):
-            raise WireGuardError(f"{name!r} is not a usable peer name")
+        if not PEER_NAME.match(name) or name != name.strip():
+            raise WireGuardError(
+                f"{name!r} is not a usable peer name. Use letters, digits, spaces, "
+                f"and . _ - only, starting with a letter or digit (at most 64 "
+                f"characters)."
+            )
 
         if profile == "hotspot-relay" and not tether_subnet:
             # The ranges Android and iOS use for tethering, covering both.
