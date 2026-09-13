@@ -5,7 +5,7 @@ set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo "needs root: sudo $0" >&2; exit 1; }
 
 missing=()
-for tool in ip nft dig openssl; do
+for tool in ip ss nft dig openssl; do
     command -v "$tool" >/dev/null || missing+=("$tool")
 done
 if [[ ${#missing[@]} -gt 0 ]]; then

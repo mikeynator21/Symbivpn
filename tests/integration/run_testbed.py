@@ -230,10 +230,47 @@ class Testbed:
                 output = self.gateway_process.stdout.read() if self.gateway_process.stdout else ""
                 raise RuntimeError(f"the gateway exited during start-up:\n{output}")
             if sh(topo.GATEWAY, "nft", "list", "tables").stdout.count("symbivpn"):
-                time.sleep(1.5)  # Let the listeners finish binding.
+                self._wait_for_listeners()
                 return
             time.sleep(0.5)
         raise RuntimeError("the gateway did not come up")
+
+    def _wait_for_listeners(self) -> None:
+        """Block until the gateway's UDP listeners are actually bound.
+
+        The nftables tables appear well before the sockets do -- the ruleset is
+        installed early, and the resolver still has a few hundred thousand
+        blocklist rules to compile. Sleeping a fixed moment instead of checking
+        is a race that a fast machine wins and a loaded one loses: the symptom
+        is a DHCP probe that gets no offer, and then every check that needed an
+        address failing with "network unreachable", which points nowhere near
+        the cause.
+        """
+        def listening() -> set[int]:
+            out = sh(topo.GATEWAY, "ss", "-lun").stdout
+            ports = set()
+            for line in out.splitlines()[1:]:
+                fields = line.split()
+                if len(fields) >= 4 and ":" in fields[3]:
+                    try:
+                        ports.add(int(fields[3].rsplit(":", 1)[1]))
+                    except ValueError:
+                        continue
+            return ports
+
+        # 53 is always served. 67 only when this scenario runs the hotspot, so
+        # its absence is not an error -- but when it is coming, we wait for it
+        # rather than racing it.
+        deadline = time.time() + 30
+        dhcp_grace = time.time() + 20
+        while time.time() < deadline:
+            ports = listening()
+            if 53 in ports and (67 in ports or time.time() > dhcp_grace):
+                return
+            time.sleep(0.2)
+        raise RuntimeError(
+            f"the gateway's listeners never bound (saw {sorted(listening())})"
+        )
 
     def start_guest_service(self) -> None:
         """A listener on the guest network, standing in for a printer or a TV."""
