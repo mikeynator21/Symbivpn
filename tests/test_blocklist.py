@@ -1,11 +1,24 @@
 """Tests for blocklist parsing and matching."""
 
+import gzip
+import http.server
+import socket
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from symbivpn import blocklist
-from symbivpn.blocklist import BlocklistManager, DomainSet, parent_domains, parse_rules
+from symbivpn import blocklist as blocklist_module
+from symbivpn.blocklist import (
+    MAX_LIST_BYTES,
+    BlocklistManager,
+    DomainSet,
+    parent_domains,
+    parse_rules,
+)
 
 
 class ParentDomainTests(unittest.TestCase):
@@ -220,6 +233,111 @@ class ManagerTests(unittest.TestCase):
         self.assertGreater(len(blocklist.DOH_BOOTSTRAP_DOMAINS), 30)
         self.assertIn("dns.google", blocklist.DOH_BOOTSTRAP_DOMAINS)
         self.assertIn("use-application-dns.net", blocklist.DOH_BOOTSTRAP_DOMAINS)
+
+
+class RemoteRegexTests(unittest.TestCase):
+    """A downloaded list does not get to write a regex.
+
+    Every regex is run against every name the network looks up, so one crafted
+    pattern is not a bad rule -- it is a stall for every device at once.
+    """
+
+    def test_a_regex_from_a_list_is_refused(self):
+        result = parse_rules("/(a+)+b$/", "https://lists.example/x.txt")
+        self.assertEqual(len(result.block.regex), 0)
+        self.assertEqual(result.regexes_refused, 1)
+
+    def test_the_rest_of_the_list_still_loads(self):
+        result = parse_rules(
+            "/(a+)+b$/\nads.example.com\n", "https://lists.example/x.txt"
+        )
+        self.assertEqual(result.regexes_refused, 1)
+        self.assertTrue(result.block.match("ads.example.com"))
+
+    def test_an_explicitly_trusted_source_may_write_one(self):
+        result = parse_rules("/^ads[0-9]+\\./", "config", trust_regex_rules=True)
+        self.assertEqual(len(result.block.regex), 1)
+
+    def test_a_refused_regex_never_runs(self):
+        # The measurement that matters: with the pattern refused, a name that
+        # would have taken exponential time costs nothing.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "list.txt").write_text("/(a+)+b$/\n")
+
+        manager = BlocklistManager(root / "cache")
+        manager.load([str(root / "list.txt")])
+        self.assertEqual(len(manager.block.regex), 0)
+
+        started = time.perf_counter()
+        manager.is_blocked("a" * 32 + ".example.com")
+        self.assertLess(time.perf_counter() - started, 1.0)
+
+    def test_a_regex_from_the_local_config_still_applies(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        manager = BlocklistManager(Path(tmp.name) / "cache")
+        manager.load([], extra_regex=[r"^ads[0-9]+\."])
+        self.assertTrue(manager.is_blocked("ads42.example.com"))
+        self.assertFalse(manager.is_blocked("news.example.com"))
+
+
+class ListSizeTests(unittest.TestCase):
+    """A list is read into memory, and we ask for it gzipped."""
+
+    def serve(self, body, *, gzipped):
+        """Serve one response and return the URL it is at."""
+        class Once(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                if gzipped:
+                    self.send_header("Content-Encoding", "gzip")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        server = http.server.HTTPServer(("127.0.0.1", port), Once)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        # shutdown() stops the loop; server_close() releases the listening
+        # socket. Without the second the suite emits a ResourceWarning, which
+        # is exactly the noise that hides a real leak later.
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{port}/list.txt"
+
+    def test_a_gzip_bomb_is_refused(self):
+        # Around 1000:1, which is what gzip manages on repetitive input: a body
+        # well inside any sane download cap still expands past this machine.
+        bomb = gzip.compress(b"\0" * (MAX_LIST_BYTES * 4), compresslevel=9)
+        self.assertLess(len(bomb), MAX_LIST_BYTES)
+        with self.assertRaises(ValueError) as caught:
+            BlocklistManager._download(self.serve(bomb, gzipped=True), {})
+        self.assertIn("expands to more than", str(caught.exception))
+
+    def test_an_oversized_plain_body_is_refused(self):
+        body = b"x.example.com\n" * 10
+        with mock.patch.object(blocklist_module, "MAX_LIST_BYTES", 8):
+            with self.assertRaises(ValueError) as caught:
+                BlocklistManager._download(self.serve(body, gzipped=False), {})
+        self.assertIn("larger than", str(caught.exception))
+
+    def test_an_ordinary_list_still_downloads(self):
+        body = b"0.0.0.0 ads.example.com\n0.0.0.0 tracker.example.com\n"
+        text, _ = BlocklistManager._download(self.serve(body, gzipped=False), {})
+        self.assertIn("ads.example.com", text)
+
+    def test_an_ordinary_gzipped_list_still_downloads(self):
+        body = gzip.compress(b"0.0.0.0 ads.example.com\n")
+        text, _ = BlocklistManager._download(self.serve(body, gzipped=True), {})
+        self.assertIn("ads.example.com", text)
 
 
 if __name__ == "__main__":

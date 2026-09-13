@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import io
 import json
 import logging
 import os
@@ -26,6 +27,13 @@ log = logging.getLogger(__name__)
 
 USER_AGENT = "SymbiVPN/1.0 (+https://github.com/mikeynator21/Symbivpn)"
 FETCH_TIMEOUT = 30
+
+#: Most a single list may occupy in memory, compressed or expanded. The largest
+#: lists in circulation are tens of megabytes, so this is generous -- it is a
+#: ceiling, not a budget. Both halves matter: the download is read into memory,
+#: and we ask for gzip, which a hostile source can answer with a small body that
+#: expands to gigabytes. The gateway is often a Raspberry Pi.
+MAX_LIST_BYTES = 64 * 1024 * 1024
 
 # Addresses a hosts file uses to mean "nowhere".  A line pointing at any other
 # address is a real host mapping, not a block rule, and is ignored.
@@ -149,6 +157,8 @@ class ParseResult:
     lines_skipped: int = 0
     #: Exception rules seen in a source that is not trusted to write them.
     allow_rules_ignored: int = 0
+    #: Regex rules seen in a source that is not trusted to write them.
+    regexes_refused: int = 0
 
 
 def parse_rules(
@@ -157,6 +167,7 @@ def parse_rules(
     *,
     hosts_match_subdomains: bool = True,
     trust_allow_rules: bool = False,
+    trust_regex_rules: bool = False,
     into: ParseResult | None = None,
 ) -> ParseResult:
     """Parse any supported list format into block/allow rules.
@@ -171,6 +182,15 @@ def parse_rules(
     switches protection off for a name, so a compromised or hijacked list
     source could un-block whatever it liked and nothing would look wrong.
     Allowlisting stays a local decision.
+
+    `trust_regex_rules` decides whether ``/pattern/`` rules in the source are
+    compiled.  Off for downloaded lists, for a sharper reason than allow rules:
+    every regex is run against every name the network looks up, so a single
+    crafted pattern -- ``/(a+)+b$/`` is the classic -- takes exponential time
+    and stalls DNS for every device at once.  Community DNS lists do not use
+    the syntax; a list that suddenly does is the interesting case, not the
+    normal one.  Regexes from the local config are unaffected: they never come
+    through here.
     """
     result = into if into is not None else ParseResult()
 
@@ -189,7 +209,9 @@ def parse_rules(
             if not line:
                 continue
 
-        if _consume_rule(line, source, result, hosts_match_subdomains, trust_allow_rules):
+        if _consume_rule(
+            line, source, result, hosts_match_subdomains, trust_allow_rules, trust_regex_rules
+        ):
             continue
         result.lines_skipped += 1
 
@@ -202,6 +224,7 @@ def _consume_rule(
     result: ParseResult,
     hosts_match_subdomains: bool,
     trust_allow_rules: bool = False,
+    trust_regex_rules: bool = False,
 ) -> bool:
     """Apply one already-trimmed line. Returns False if it isn't a usable rule."""
     allow_match = _ADBLOCK_ALLOW.match(line)
@@ -230,6 +253,10 @@ def _consume_rule(
     # that need HTTP context).  Recognised so it is not counted as garbage.
     if line.startswith(("@@", "||", "|", "/", "##", "#@#", "#?#")) and not line.startswith("/*"):
         if line.startswith("/") and line.endswith("/") and len(line) > 2:
+            if not trust_regex_rules:
+                # Recognised and deliberately dropped, not silently mis-parsed.
+                result.regexes_refused += 1
+                return True
             result.block.add_regex(line[1:-1], source)
             return True
         return False
@@ -280,6 +307,7 @@ def _merge(target: ParseResult, extra: ParseResult) -> None:
     target.lines_read += extra.lines_read
     target.lines_skipped += extra.lines_skipped
     target.allow_rules_ignored += extra.allow_rules_ignored
+    target.regexes_refused += extra.regexes_refused
 
 
 def _add_domain(target: DomainSet, domain: str, source: str, as_suffix: bool) -> None:
@@ -326,11 +354,15 @@ class BlocklistManager:
         *,
         hosts_match_subdomains: bool = True,
         trust_remote_allow_rules: bool = False,
+        trust_remote_regex_rules: bool = False,
         collapse_threshold: float = 0.5,
     ) -> None:
         self.cache_dir = Path(cache_dir)
         #: Honour @@|| exception rules found in downloaded lists.
         self.trust_remote_allow_rules = trust_remote_allow_rules
+        #: Compile /pattern/ rules found in downloaded lists. One bad pattern
+        #: is run against every name the network looks up, so this is off.
+        self.trust_remote_regex_rules = trust_remote_regex_rules
         #: Refuse an update that drops a source below this fraction of the
         #: rule count it had last time. A list that suddenly loses most of its
         #: rules is a broken source or a hijacked one; either way the previous
@@ -391,6 +423,7 @@ class BlocklistManager:
                 source=url,
                 hosts_match_subdomains=self.hosts_match_subdomains,
                 trust_allow_rules=self.trust_remote_allow_rules,
+                trust_regex_rules=self.trust_remote_regex_rules,
             )
             produced = len(scratch.block) + len(scratch.allow)
             previous = self._rule_counts.get(url, 0)
@@ -415,6 +448,7 @@ class BlocklistManager:
                     source=url,
                     hosts_match_subdomains=self.hosts_match_subdomains,
                     trust_allow_rules=self.trust_remote_allow_rules,
+                    trust_regex_rules=self.trust_remote_regex_rules,
                 )
                 produced = len(scratch.block) + len(scratch.allow)
             else:
@@ -430,6 +464,16 @@ class BlocklistManager:
                     "%s: ignored %d exception rules -- a downloaded list does not "
                     "get to decide what stays unfiltered",
                     url, scratch.allow_rules_ignored,
+                )
+            if scratch.regexes_refused:
+                # Worth a warning rather than an info: community DNS lists do
+                # not ship these, so a list that starts to is worth a look.
+                log.warning(
+                    "%s: refused %d regex rules. Every regex runs against every "
+                    "name the network looks up, so one crafted pattern stalls DNS "
+                    "for every device. Add it to blocklists.regex in the config "
+                    "if you have read it and want it.",
+                    url, scratch.regexes_refused,
                 )
             log.info("blocklist %s: %d rules%s", url, stats.rules, " (cached)" if from_cache else "")
 
@@ -581,9 +625,24 @@ class BlocklistManager:
         context = ssl.create_default_context()
         try:
             with urllib.request.urlopen(request, timeout=FETCH_TIMEOUT, context=context) as response:
-                payload = response.read()
+                payload = response.read(MAX_LIST_BYTES + 1)
+                if len(payload) > MAX_LIST_BYTES:
+                    raise ValueError(
+                        f"{url} is larger than {MAX_LIST_BYTES // (1024 * 1024)}MB; "
+                        f"refusing to load it"
+                    )
                 if response.headers.get("Content-Encoding", "").lower() == "gzip":
-                    payload = gzip.decompress(payload)
+                    # Expanded through a bounded read rather than decompressed
+                    # whole: gzip reaches about 1000:1, so a body well inside
+                    # the cap above can still expand to more memory than the
+                    # machine has.
+                    with gzip.GzipFile(fileobj=io.BytesIO(payload)) as expanded:
+                        payload = expanded.read(MAX_LIST_BYTES + 1)
+                    if len(payload) > MAX_LIST_BYTES:
+                        raise ValueError(
+                            f"{url} expands to more than "
+                            f"{MAX_LIST_BYTES // (1024 * 1024)}MB; refusing to load it"
+                        )
                 fresh = {}
                 if tag := response.headers.get("ETag"):
                     fresh["etag"] = tag
