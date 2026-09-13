@@ -212,6 +212,23 @@ would let it un-block whatever it liked with nothing looking wrong.
 Allowlisting is a local decision; `blocklists.trust_remote_allow_rules` turns
 this off if you need it.
 
+**Regex rules from downloads are refused.** A `/pattern/` line in a list is
+compiled and then run against every name the network looks up. `/(a+)+b$/` is
+the classic: measured, one lookup of a 32-character name took 21 seconds, and
+doubles for every two characters added. That is not a bad rule — it is DNS
+stopped for every device at once, from one line in a list nobody reads.
+Community DNS lists do not use the syntax, so a list that starts to is worth
+the warning this logs. Regexes in `blocklists.regex` in your own config are
+unaffected; `blocklists.trust_remote_regex_rules` turns the refusal off if you
+have read the list and want it.
+
+**A list cannot be a decompression bomb.** Lists are fetched with
+`Accept-Encoding: gzip`, and gzip reaches about 1000:1 — so a megabyte on the
+wire expands to a gigabyte, on a gateway that is often a Raspberry Pi. Both the
+download and its expansion are bounded at 64MB, the expansion through a
+bounded read rather than a whole decompress. An oversized list is skipped and
+the cached copy kept.
+
 **A collapsed source is refused.** If a list that had 80,000 rules comes back
 with 12, that is a broken source or a hijacked one. The update is rejected and
 the previous copy kept. Local files are exempt — a file shrinking is its owner
