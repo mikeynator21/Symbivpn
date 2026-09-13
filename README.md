@@ -341,7 +341,7 @@ Three layers, each proving something the one below it cannot.
 ```bash
 python3 -m unittest discover -s tests -v      # 472 unit tests, no network needed
 symbivpn selftest                            # 55 checks, the real stack on loopback
-sudo ./tests/integration/run.sh               # 66 checks on a virtual network
+sudo ./tests/integration/run.sh               # 66 checks on a virtual network  (run this locally; see below)
 ```
 
 **Unit tests** cover the pieces. X25519 is checked against the RFC 7748
@@ -376,6 +376,15 @@ Stated here rather than left to be discovered:
   around the filter. The firewall rules narrow this a lot; they do not close it.
 - **hostapd is not covered by the tests** — an access point needs a real radio.
 - **Android without root** cannot bind port 53 or install firewall rules.
+- **The integration testbed does not pass on GitHub's hosted runners.** It
+  passes locally, and CI runs it on every push and shows the result, but it
+  cannot block there: on a hosted runner the phone's DHCP request never
+  reaches the gateway, and every check needing an address fails behind it.
+  The gateway is demonstrably healthy in those runs — the ruleset loads, the
+  input chain accepts DHCP, both bridge ports are forwarding, and the server
+  reports it is serving and then hears nothing — so this is the harness
+  meeting a different kernel, not the filter misbehaving. Run it yourself
+  before trusting a change to the gateway.
 
 ## Requirements
 
