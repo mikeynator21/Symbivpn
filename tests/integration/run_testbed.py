@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT))
 
 from tests.integration import topology as topo  # noqa: E402
 
-CERT_DIR = Path("/tmp/wgt-certs")
+CERT_DIR = Path("/tmp/symbivpn-testbed-certs")
 UPSTREAM_STATE = Path("/tmp/wgt-upstream.json")
 
 

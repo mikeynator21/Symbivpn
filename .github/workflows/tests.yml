@@ -1,0 +1,80 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: unit tests (python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is the floor (tomllib); the newest is what most people will
+        # actually have. Both are tested because the project promises to run
+        # on the standard library alone, and that promise is version-shaped.
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: No dependencies to install
+        run: python -c "import sys; print(sys.version)"
+      - name: Byte-compile everything
+        run: python -m compileall -q symbivpn tests
+      - name: Run the unit tests
+        run: python -m unittest discover -s tests -v
+
+  selftest:
+    name: self-test (the real stack on loopback)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run the self-test
+        env:
+          SYMBIVPN_STATE: ${{ runner.temp }}/symbivpn-state
+        run: python -m symbivpn.cli selftest --port 15353
+
+  integration:
+    name: integration (a virtual network in namespaces)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the tools the testbed drives
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            nftables iproute2 bind9-dnsutils openssl
+      - name: Run the testbed
+        # Root, because it builds network namespaces and loads nftables rules.
+        # The runner's own python3 is used: sudo resets PATH, and ubuntu-latest
+        # ships one newer than the 3.11 floor.
+        run: sudo ./tests/integration/run.sh
+
+  scripts:
+    name: shell scripts parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check every shell script
+        run: |
+          status=0
+          while IFS= read -r script; do
+              if bash -n "$script"; then
+                  echo "ok   $script"
+              else
+                  echo "FAIL $script"
+                  status=1
+              fi
+          done < <(find . -name '*.sh' -not -path './.git/*')
+          exit $status
