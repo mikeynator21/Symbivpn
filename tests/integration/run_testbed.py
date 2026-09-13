@@ -219,21 +219,39 @@ class Testbed:
         write_config(self.config_path, self.state_dir, upstream,
                      require_encrypted=require_encrypted, pins=pins,
                      share_discovery=share_discovery)
+        self.gateway_log = self.state_dir / "gateway.log"
+        # Written to a file, not a pipe. An unread pipe wedges the writer once
+        # 64KB of logging accumulates, and a file is something we can show when
+        # a check fails for a reason the check itself cannot see.
+        self._gateway_log_handle = self.gateway_log.open("w", encoding="utf-8")
         self.gateway_process = subprocess.Popen(
             ["ip", "netns", "exec", topo.GATEWAY, "python3",
              str(HERE / "gateway_node.py"), str(self.config_path)],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=self.env,
+            stdout=self._gateway_log_handle, stderr=subprocess.STDOUT,
+            text=True, env=self.env,
         )
         deadline = time.time() + 40
         while time.time() < deadline:
             if self.gateway_process.poll() is not None:
-                output = self.gateway_process.stdout.read() if self.gateway_process.stdout else ""
-                raise RuntimeError(f"the gateway exited during start-up:\n{output}")
+                raise RuntimeError(
+                    f"the gateway exited during start-up:\n{self.read_gateway_log()}"
+                )
             if sh(topo.GATEWAY, "nft", "list", "tables").stdout.count("symbivpn"):
                 self._wait_for_listeners()
                 return
             time.sleep(0.5)
         raise RuntimeError("the gateway did not come up")
+
+    def read_gateway_log(self, lines: int = 60) -> str:
+        """The tail of the gateway's own log, for when a check fails opaquely."""
+        try:
+            self._gateway_log_handle.flush()
+        except (AttributeError, ValueError):
+            pass
+        try:
+            return "\n".join(self.gateway_log.read_text(encoding="utf-8").splitlines()[-lines:])
+        except OSError as exc:
+            return f"(could not read the gateway log: {exc})"
 
     def _wait_for_listeners(self) -> None:
         """Block until the gateway's UDP listeners are actually bound.
@@ -258,18 +276,17 @@ class Testbed:
                         continue
             return ports
 
-        # 53 is always served. 67 only when this scenario runs the hotspot, so
-        # its absence is not an error -- but when it is coming, we wait for it
-        # rather than racing it.
+        # gateway_node.py always starts the resolver and the DHCP server, so
+        # both ports are expected every time -- no grace period, no guessing.
+        wanted = {53, 67}
         deadline = time.time() + 30
-        dhcp_grace = time.time() + 20
         while time.time() < deadline:
-            ports = listening()
-            if 53 in ports and (67 in ports or time.time() > dhcp_grace):
+            if wanted <= listening():
                 return
-            time.sleep(0.2)
+            time.sleep(0.1)
         raise RuntimeError(
-            f"the gateway's listeners never bound (saw {sorted(listening())})"
+            f"the gateway's listeners never bound: wanted {sorted(wanted)}, "
+            f"saw {sorted(listening())}"
         )
 
     def start_guest_service(self) -> None:
@@ -341,6 +358,27 @@ def scenario_gateway_up(report: Report) -> None:
     report.check("DoT port rejected", "853" in filter_rules)
 
 
+def _explain_dhcp_failure(testbed: Testbed) -> None:
+    """Print what the gateway saw when a lease does not arrive.
+
+    Without this, every later check fails with "network unreachable" and the
+    log says nothing about why the phone has no address -- which is the one
+    thing worth knowing.
+    """
+    print("\n  --- no lease: what the gateway looked like ---")
+    for label, command in (
+        ("listening sockets", ("ss", "-lunp")),
+        ("addresses", ("ip", "-brief", "addr")),
+        ("bridge ports", ("bridge", "link", "show")),
+        ("nftables input chain", ("nft", "list", "chain", "inet", "symbivpn_filter", "input")),
+    ):
+        out = sh(topo.GATEWAY, *command).stdout.strip()
+        print(f"  [{label}]\n{out or '    (nothing)'}")
+    print("  [gateway log]")
+    print(testbed.read_gateway_log(40))
+    print("  --- end ---\n")
+
+
 def scenario_dhcp(report: Report, testbed: Testbed) -> dict:
     report.heading("A phone joins, having been told nothing")
 
@@ -350,10 +388,12 @@ def scenario_dhcp(report: Report, testbed: Testbed) -> dict:
     except (ValueError, IndexError):
         report.check("phone obtained a DHCP lease", False,
                      (result.stdout + result.stderr).strip()[:160])
+        _explain_dhcp_failure(testbed)
         return {}
 
     if "error" in lease:
         report.check("phone obtained a DHCP lease", False, lease["error"])
+        _explain_dhcp_failure(testbed)
         return {}
 
     report.check("phone obtained a DHCP lease", True, f"address {lease['address']}")
