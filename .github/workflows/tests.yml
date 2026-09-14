@@ -29,6 +29,8 @@ jobs:
         run: python -c "import sys; print(sys.version)"
       - name: Byte-compile everything
         run: python -m compileall -q symbivpn tests
+      - name: The downloadable cipher box is current
+        run: python tools/build_cipherbox.py --check
       - name: Run the unit tests
         run: python -m unittest discover -s tests -v
 

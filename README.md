@@ -372,6 +372,23 @@ crosses between two subnets only when reflection is switched on. See
 [tests/integration/README.md](tests/integration/README.md), including the two
 real bugs it caught that the unit tests could not.
 
+## If the gateway dies
+
+Your peers' private keys are encrypted, which is the point — and it means the
+one thing that could read them was on the machine that died.
+
+`tools/symbivpn-cipherbox.py` is a single file with no dependencies and
+nothing to install. Keep a copy with your exported key, and either can be
+recovered anywhere Python 3.11 runs:
+
+```bash
+python3 symbivpn-cipherbox.py configs peers.json --key-file symbivpn.key --out ./recovered
+```
+
+It is generated from the same cipher the daemon uses, and CI fails if the two
+drift apart — a stale copy of a cipher is worse than none, because it looks
+fine right up until you need it.
+
 ## Known limits
 
 Stated here rather than left to be discovered:

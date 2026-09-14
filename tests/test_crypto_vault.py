@@ -5,8 +5,10 @@ standards' own numbers rather than against itself: a wrong implementation that
 round-trips with itself is exactly the failure mode to guard against.
 """
 
+import json
 import secrets
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -354,6 +356,85 @@ class PairingTests(unittest.TestCase):
         self.assertEqual(sorted(reopened.peers), ["phone"])
         reopened.save()
         self.assertTrue(vault.looks_sealed(self.store_path.read_bytes()))
+
+
+class CipherBoxTests(unittest.TestCase):
+    """The standalone opener, which has to work when nothing else does."""
+
+    root = Path(__file__).resolve().parent.parent
+    box = root / "tools" / "symbivpn-cipherbox.py"
+
+    def test_it_exists_and_is_runnable(self):
+        self.assertTrue(self.box.exists(), "the cipher box is missing from the repo")
+        self.assertTrue(self.box.stat().st_mode & 0o111, "it should be executable")
+
+    def test_it_is_current(self):
+        # Generated from aesgcm.py and vault.py. If either changed and this
+        # was not regenerated, the downloadable copy is quietly stale -- and
+        # a stale cipher is worse than no cipher, because it looks fine.
+        result = subprocess.run(
+            [sys.executable, str(self.root / "tools" / "build_cipherbox.py"), "--check"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(
+            result.returncode, 0,
+            f"the cipher box is out of date:\n{result.stdout}{result.stderr}",
+        )
+
+    def test_it_depends_on_nothing(self):
+        source = self.box.read_text()
+        for line in source.splitlines():
+            if line.startswith(("import ", "from ")):
+                module = line.split()[1].split(".")[0]
+                self.assertIn(
+                    module,
+                    {"__future__", "argparse", "getpass", "hashlib", "hmac", "json",
+                     "logging", "os", "pathlib", "secrets", "stat", "struct", "sys",
+                     "types"},
+                    f"the cipher box must stay standalone; it imports {module!r}",
+                )
+
+    def test_it_opens_what_symbivpn_sealed(self):
+        """The whole point: recover peers on a machine with nothing installed."""
+        from symbivpn.vpn.wireguard import PeerStore, WireGuardManager
+
+        work = tempfile.TemporaryDirectory()
+        self.addCleanup(work.cleanup)
+        state = Path(work.name)
+
+        key = vault.local_key(state)
+        manager = WireGuardManager(PeerStore(state / "peers.json", key=key))
+        manager.initialise_server(endpoint="vpn.example.com")
+        manager.add_peer("phone")
+        expected = manager.store.peers["phone"].private_key
+
+        bundle = state / "exported.key"
+        bundle.write_bytes(vault.export_bundle("a passphrase", {"state_key": key.hex()}))
+
+        # -I: isolated mode, so nothing from this environment is importable.
+        result = subprocess.run(
+            [sys.executable, "-I", str(self.box), "peers",
+             str(state / "peers.json"), "--key-file", str(bundle)],
+            input="a passphrase\n", capture_output=True, text=True,
+            cwd=work.name,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        recovered = json.loads(result.stdout)
+        self.assertEqual(recovered["peers"][0]["private_key"], expected)
+
+    def test_a_wrong_passphrase_fails_cleanly(self):
+        work = tempfile.TemporaryDirectory()
+        self.addCleanup(work.cleanup)
+        bundle = Path(work.name) / "exported.key"
+        bundle.write_bytes(vault.export_bundle("right", {"state_key": "ab" * 32}))
+
+        result = subprocess.run(
+            [sys.executable, "-I", str(self.box), "key", str(bundle)],
+            input="wrong\n", capture_output=True, text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("Traceback", result.stderr, "it should explain, not crash")
+        self.assertIn("passphrase", result.stderr.lower())
 
 
 if __name__ == "__main__":
