@@ -186,5 +186,101 @@ class QRRenderTests(unittest.TestCase):
         self.assertGreater(len(text.splitlines()), 10)
 
 
+class X25519DepthTests(unittest.TestCase):
+    """The checks a single multiplication happens to survive.
+
+    Every WireGuard key on the network comes out of this. A subtly wrong
+    implementation does not look broken -- it produces keys that are simply
+    weaker than they appear, or that no other implementation agrees with.
+    """
+
+    def test_rfc_7748_iterated_vector(self):
+        # Section 5.2: iterate k, u = X25519(k, u), k. This is the vector that
+        # catches carry propagation and reduction bugs; the single-shot ones
+        # can pass with arithmetic that is wrong in the general case.
+        k = u = bytes.fromhex(
+            "0900000000000000000000000000000000000000000000000000000000000000"
+        )
+        expected = {
+            1: "422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079",
+            1000: "684cf59ba83309552800ef566f2f4d3c1c3887c49360e3875f2eb94d99532c51",
+        }
+        for iteration in range(1, 1001):
+            k, u = crypto.x25519(k, u), k
+            if iteration in expected:
+                self.assertEqual(k.hex(), expected[iteration],
+                                 f"diverged after {iteration} iterations")
+
+    def test_the_high_bit_of_u_is_ignored(self):
+        # RFC 7748 requires masking bit 255 of the u-coordinate. Without it a
+        # non-canonical encoding gives a different answer from every other
+        # implementation, which shows up as a peer that will not connect.
+        scalar = bytes.fromhex(
+            "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4"
+        )
+        point = bytes.fromhex(
+            "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c"
+        )
+        non_canonical = point[:31] + bytes([point[31] | 0x80])
+        self.assertEqual(crypto.x25519(scalar, point),
+                         crypto.x25519(scalar, non_canonical))
+
+    def test_small_order_points_give_nothing_away(self):
+        scalar = bytes.fromhex(
+            "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"
+        )
+        for point in (
+            "00" * 32,
+            "01" + "00" * 31,
+            "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+            "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157",
+        ):
+            with self.subTest(point=point[:16]):
+                self.assertEqual(
+                    crypto.x25519(scalar, bytes.fromhex(point)), bytes(32),
+                    "a small-order point must produce an all-zero secret",
+                )
+
+
+class WireGuardInteropTests(unittest.TestCase):
+    """Keys are only useful if the other end agrees what they are."""
+
+    def setUp(self):
+        import shutil
+
+        if shutil.which("wg") is None:
+            self.skipTest("the wg tool is not installed")
+
+    def _wg_pubkey(self, private_b64: str) -> str:
+        import subprocess
+
+        return subprocess.run(
+            ["wg", "pubkey"], input=private_b64,
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+    def test_our_public_keys_match_wg(self):
+        # The fallback path, used on any machine without the wg tool. If it
+        # disagreed, peers created there would silently never connect.
+        for _ in range(10):
+            private = crypto.generate_private_key()
+            self.assertEqual(
+                crypto.encode_key(crypto.public_key(private)),
+                self._wg_pubkey(crypto.encode_key(private)),
+            )
+
+    def test_we_derive_wg_generated_keys_identically(self):
+        import subprocess
+
+        for _ in range(10):
+            private = subprocess.run(
+                ["wg", "genkey"], capture_output=True, text=True, check=True
+            ).stdout.strip()
+            self.assertEqual(
+                crypto.encode_key(crypto.public_key(crypto.decode_key(private))),
+                self._wg_pubkey(private),
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
