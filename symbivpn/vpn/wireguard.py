@@ -29,6 +29,8 @@ from typing import Literal
 
 from . import crypto, qr
 
+from .. import vault
+
 log = logging.getLogger(__name__)
 
 #: What a peer may be called. Deliberately narrow, because the name is not just
@@ -135,20 +137,62 @@ class ServerConfig:
 
 
 class PeerStore:
-    """Peers and server keys, persisted as JSON with restrictive permissions."""
+    """Peers and server keys, persisted with restrictive permissions.
 
-    def __init__(self, path: Path) -> None:
+    Every peer's private key is in here -- kept rather than discarded so a QR
+    code can be shown again later -- which makes this the one file whose loss
+    hands over the whole tunnel. Given a key it is encrypted with AES-256-GCM,
+    so a backup or a retired SD card carries ciphertext instead.
+    """
+
+    def __init__(self, path: Path, key: bytes | None = None) -> None:
         self.path = Path(path)
+        #: The state key, when the state directory has one. Without it the
+        #: file is written in the clear, as it always was.
+        self.key = key
         self.peers: dict[str, Peer] = {}
         self.server: ServerConfig | None = None
+        #: Set when an older plaintext file was read, so `save` knows to
+        #: convert it rather than leave it as it found it.
+        self.needs_sealing = False
+        #: Sealed state with no key on this machine: the connector holds it.
+        #: Construction still succeeds, because everything that does not need
+        #: the peer keys -- which is to say the whole resolver -- must carry on.
+        self.locked = False
         self.load()
 
     def load(self) -> None:
         if not self.path.exists():
             return
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
+            raw = self.path.read_bytes()
+        except OSError as exc:
+            raise WireGuardError(f"could not read {self.path}: {exc}") from exc
+
+        if vault.looks_sealed(raw):
+            if self.key is None:
+                self.locked = True
+                log.warning(
+                    "%s is encrypted and its key is not on this machine, so the "
+                    "VPN peers cannot be read. Filtering is unaffected. Unlock "
+                    "from the connector device with `symbivpn unlock`.",
+                    self.path,
+                )
+                return
+            try:
+                text = vault.unseal(self.key, raw, context=b"peers").decode("utf-8")
+            except vault.VaultError as exc:
+                raise WireGuardError(f"could not decrypt {self.path}: {exc}") from exc
+        else:
+            # An install from before the state was encrypted. Read it, and let
+            # `save` convert it -- silently leaving keys in the clear because
+            # of when the file was written would be the wrong kindness.
+            text = raw.decode("utf-8", "replace")
+            self.needs_sealing = self.key is not None
+
+        try:
+            payload = json.loads(text)
+        except ValueError as exc:
             raise WireGuardError(f"could not read {self.path}: {exc}") from exc
 
         server = payload.get("server")
@@ -166,6 +210,28 @@ class PeerStore:
         for entry in payload.get("peers", []):
             peer = Peer(**entry)
             self.peers[peer.name] = peer
+
+    def unlock(self, key: bytes) -> bytes:
+        """Supply the connector's key for this boot, and read the peers.
+
+        The key is held in memory only. A restart locks it again, which is
+        what makes the connector the thing that carries it.
+        """
+        if not self.locked:
+            return key
+        self.key = key
+        self.locked = False
+        self.peers.clear()
+        self.server = None
+        try:
+            self.load()
+        except WireGuardError:
+            self.key = None
+            self.locked = True
+            raise
+        if self.locked:                      # load() re-locked: wrong key
+            raise WireGuardError("that key does not open this state")
+        return key
 
     def save(self) -> None:
         payload = {
@@ -185,13 +251,34 @@ class PeerStore:
             ),
             "peers": [peer.as_dict() for peer in self.peers.values()],
         }
+        if self.locked:
+            # The one thing that must never happen: writing an empty store
+            # over sealed peers, so that unlocking later finds them gone.
+            raise WireGuardError(
+                "the VPN state is locked, so it cannot be written. Unlock with "
+                "`symbivpn unlock` before changing peers."
+            )
+
+        body = json.dumps(payload, indent=2).encode("utf-8")
         self.path.parent.mkdir(parents=True, exist_ok=True)
+
+        if self.key is not None:
+            vault.seal_file(self.path, self.key, body, context=b"peers")
+            self.needs_sealing = False
+            return
+
+        # No state key: written in the clear, as before. Opened 0600 rather
+        # than chmodded afterwards -- between creating the file and changing
+        # its mode is a window in which every private key here is readable by
+        # anyone on the machine.
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        # Private keys live in this file; nobody but the owner may read it.
-        os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)
+        descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                             stat.S_IRUSR | stat.S_IWUSR)
+        try:
+            os.write(descriptor, body)
+        finally:
+            os.close(descriptor)
         tmp.replace(self.path)
-        os.chmod(self.path, stat.S_IRUSR | stat.S_IWUSR)
 
 
 class WireGuardManager:

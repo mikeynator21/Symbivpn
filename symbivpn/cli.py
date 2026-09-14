@@ -85,6 +85,27 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("harden", help="audit this configuration for weak settings")
 
+    key = sub.add_parser("key", help="where the state-encryption key lives")
+    key_sub = key.add_subparsers(dest="action", required=True, metavar="<action>")
+    key_sub.add_parser("status", help="is the state encrypted, and who holds the key?")
+    key_export = key_sub.add_parser(
+        "export", help="write the key to a passphrase-locked file to carry away"
+    )
+    key_export.add_argument("--out", required=True, help="where to write it")
+    key_pair = key_sub.add_parser(
+        "pair", help="remove the key from this machine (export it first)"
+    )
+    key_pair.add_argument(
+        "--yes", action="store_true", help="do not ask for confirmation"
+    )
+    key_restore = key_sub.add_parser(
+        "restore", help="put the key back on this machine, so it starts on its own"
+    )
+    key_restore.add_argument("--from", dest="source", required=True, help="an exported key file")
+
+    unlock = sub.add_parser("unlock", help="supply the connector's key for this boot")
+    unlock.add_argument("--from", dest="source", required=True, help="an exported key file")
+
     fieldtest = sub.add_parser(
         "fieldtest",
         help="assess the network this machine is on, and what SymbiVPN would change",
@@ -530,7 +551,8 @@ def command_blocklist(args: argparse.Namespace, cfg: Config) -> int:
 def command_vpn(args: argparse.Namespace, cfg: Config) -> int:
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
     manager = WireGuardManager(
-        PeerStore(cfg.peer_store), local_networks=cfg.resolved_vpn_routes()
+        PeerStore(cfg.peer_store, key=_state_key(cfg)),
+        local_networks=cfg.resolved_vpn_routes(),
     )
 
     try:
@@ -1268,6 +1290,137 @@ def _bytes(count: int) -> str:
     return f"{value:.1f}TB"
 
 
+def _ask_passphrase(prompt: str, *, confirm: bool) -> str:
+    import getpass
+
+    while True:
+        first = getpass.getpass(f"  {prompt}: ")
+        if len(first) < 8:
+            print("  at least 8 characters, please.")
+            continue
+        if not confirm:
+            return first
+        if first != getpass.getpass("  again: "):
+            print("  those did not match.")
+            continue
+        return first
+
+
+def command_key(args: argparse.Namespace, cfg: Config) -> int:
+    """Move the state-encryption key on or off this machine."""
+    from . import vault
+
+    state_dir = Path(cfg.state_dir)
+    paired = vault.is_paired(state_dir)
+
+    if args.action == "status":
+        sealed = cfg.peer_store.exists() and vault.looks_sealed(cfg.peer_store.read_bytes())
+        print(f"  VPN state file   {cfg.peer_store}")
+        print(f"  encrypted        {'yes, AES-256-GCM' if sealed else 'no'}")
+        if paired:
+            print("  key              on a connector device, not here")
+            print("\n  This machine cannot read its VPN peers on its own.")
+            print("  Unlock for this boot:  sudo symbivpn unlock --from <file>")
+        else:
+            print(f"  key              {state_dir / vault.KEYFILE}")
+            print("\n  The key is beside the data, so the service starts unattended.")
+            print("  That protects a stolen disk or a leaked backup -- not someone")
+            print("  who already has root here. To move it to your laptop or phone:")
+            print("    sudo symbivpn key export --out symbivpn.key")
+            print("    sudo symbivpn key pair")
+        return 0
+
+    if args.action == "export":
+        if paired:
+            print("The key is not on this machine to export.", file=sys.stderr)
+            return 1
+        try:
+            key = vault.local_key(state_dir)
+        except vault.VaultError as exc:
+            print(f"Could not read the key: {exc}", file=sys.stderr)
+            return 1
+        passphrase = _ask_passphrase("passphrase for the exported key", confirm=True)
+        blob = vault.export_bundle(passphrase, {"state_key": key.hex()})
+        destination = Path(args.out)
+        descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(descriptor, blob)
+        finally:
+            os.close(descriptor)
+        print(f"Wrote {destination} (mode 600).")
+        print("Copy it to your laptop or phone, then remove it from here.")
+        print("Losing both this file and the key on this machine loses the peers.")
+        return 0
+
+    if args.action == "pair":
+        if paired:
+            print("Already paired: the key is not on this machine.")
+            return 0
+        if not args.yes:
+            print("This removes the state key from this machine.")
+            print("Export it first, or the VPN peers become unreadable for good.")
+            if input("  type 'yes' to continue: ").strip().lower() != "yes":
+                print("Nothing changed.")
+                return 1
+        vault.pair(state_dir)
+        print("Done. This machine can no longer read its VPN peers on its own.")
+        print("Filtering is unaffected. Unlock with: sudo symbivpn unlock --from <file>")
+        return 0
+
+    if args.action == "restore":
+        key = _key_from_file(Path(args.source))
+        if key is None:
+            return 1
+        vault.unpair(state_dir, key)
+        print("The key is back on this machine; it will start on its own again.")
+        return 0
+
+    return 2
+
+
+def _key_from_file(source: Path) -> bytes | None:
+    """Read a key out of an exported bundle, asking for the passphrase."""
+    from . import vault
+
+    try:
+        blob = source.read_bytes()
+    except OSError as exc:
+        print(f"Could not read {source}: {exc}", file=sys.stderr)
+        return None
+    passphrase = _ask_passphrase("passphrase for the exported key", confirm=False)
+    try:
+        payload = vault.import_bundle(passphrase, blob)
+        return bytes.fromhex(payload["state_key"])
+    except (vault.VaultError, KeyError, ValueError) as exc:
+        print(f"Could not open {source}: {exc}", file=sys.stderr)
+        return None
+
+
+def command_unlock(args: argparse.Namespace, cfg: Config) -> int:
+    """Hand the running service the key, for this boot only."""
+    key = _key_from_file(Path(args.source))
+    if key is None:
+        return 1
+
+    try:
+        outcome = _api(cfg, "/api/unlock", payload={"key": key.hex()})
+    except NotRunning:
+        print(
+            "SymbiVPN is not running, so there is nothing to unlock. Start it "
+            "and run this again -- the key is only ever held in memory, so it "
+            "has to be given to a running service.",
+            file=sys.stderr,
+        )
+        return 1
+    except (ApiError, Ambiguous) as exc:
+        print(f"Could not unlock: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Unlocked. {outcome.get('peers', 0)} VPN peer(s) readable again.")
+    print("This lasts until the service restarts, which is the point of it.")
+    return 0
+
+
 COMMANDS = {
     "run": command_run,
     "check": command_check,
@@ -1287,6 +1440,8 @@ COMMANDS = {
     "setup": command_setup,
     "passwd": command_passwd,
     "harden": command_harden,
+    "key": command_key,
+    "unlock": command_unlock,
 }
 
 
@@ -1319,3 +1474,22 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(main())
+
+
+def _state_key(cfg) -> bytes | None:
+    """The machine's state-encryption key, if one can be had.
+
+    Never fatal: a state directory that cannot hold a key is a reason to warn
+    and carry on in the clear, not a reason to refuse to run and leave someone
+    without a resolver.
+    """
+    from .vault import VaultError, local_key
+
+    try:
+        return local_key(cfg.state_dir)
+    except (VaultError, OSError) as exc:
+        log.warning(
+            "continuing without state encryption: %s. VPN private keys will "
+            "be stored in the clear.", exc,
+        )
+        return None

@@ -393,6 +393,7 @@ def _make_handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
                 "/api/cache/flush": self._post_flush,
                 "/api/vpn/peers": self._post_peer,
                 "/api/logout": self._post_logout,
+                "/api/unlock": self._post_unlock,
             }.get(path)
 
         # -- sessions -----------------------------------------------------
@@ -446,6 +447,31 @@ def _make_handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
                     )
                 },
             )
+
+        def _post_unlock(self, body: dict) -> None:
+            """Take the connector's key and open the VPN state for this boot."""
+            from .vpn.wireguard import WireGuardError
+
+            raw = str(body.get("key", "")).strip()
+            try:
+                key = bytes.fromhex(raw)
+            except ValueError:
+                raise ValueError("`key` must be hex") from None
+            if not raw:
+                raise ValueError("`key` is required")
+
+            store = application.vpn.store
+            if not getattr(store, "locked", False):
+                self._json({"unlocked": True, "peers": len(store.peers),
+                            "note": "it was not locked"})
+                return
+            try:
+                store.unlock(key)
+            except WireGuardError as exc:
+                self._error(HTTPStatus.FORBIDDEN, str(exc))
+                return
+            log.warning("the VPN state was unlocked by a connector device")
+            self._json({"unlocked": True, "peers": len(store.peers)})
 
         def _post_logout(self, _body: dict) -> None:
             """End this browser's session, and clear the cookie."""

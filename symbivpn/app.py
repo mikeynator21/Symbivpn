@@ -91,7 +91,8 @@ class Application:
             self.vpn.resolvers = self.cluster.resolver_order()
 
         self.vpn = WireGuardManager(
-            PeerStore(config.peer_store), local_networks=config.resolved_vpn_routes()
+            PeerStore(config.peer_store, key=_state_key(config)),
+            local_networks=config.resolved_vpn_routes(),
         )
         self.gateway = None
         self.dashboard = None
@@ -395,3 +396,22 @@ def default_blocklist_sources(config: Config) -> list[str]:
     if config.blocklists.block_doh_bypass:
         sources = sources + [f"(built-in) {len(blocklist_module.DOH_BOOTSTRAP_DOMAINS)} DoH bypass domains"]
     return sources
+
+
+def _state_key(cfg) -> bytes | None:
+    """The machine's state-encryption key, if one can be had.
+
+    Never fatal: a state directory that cannot hold a key is a reason to warn
+    and carry on in the clear, not a reason to refuse to run and leave someone
+    without a resolver.
+    """
+    from .vault import VaultError, local_key
+
+    try:
+        return local_key(cfg.state_dir)
+    except (VaultError, OSError) as exc:
+        log.warning(
+            "continuing without state encryption: %s. VPN private keys will "
+            "be stored in the clear.", exc,
+        )
+        return None
