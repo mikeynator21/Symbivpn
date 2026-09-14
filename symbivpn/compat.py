@@ -171,6 +171,49 @@ ESSENTIAL_SERVICES: tuple[EssentialService, ...] = (
             "security.ubuntu.com",
         ),
     ),
+    EssentialService(
+        key="security-software",
+        title="Antivirus and endpoint security",
+        why=(
+            "Security software fetches new signatures constantly and asks a "
+            "cloud service about files and sites it has not seen before. Block "
+            "that and it does not announce itself as blocked -- it keeps "
+            "running with definitions that quietly stop being current, and a "
+            "reputation lookup that fails open. An ad blocker that leaves the "
+            "antivirus stale has made the machine less safe, not more, which "
+            "is the opposite of the point."
+        ),
+        domains=(
+            # McAfee / Trellix. update.nai.com is the historic update host and
+            # is still in use by installed products.
+            "mcafee.com", "nai.com", "trellix.com", "mcafee.ws",
+            # Norton / Symantec / Gen Digital.
+            "norton.com", "symantec.com", "nortonlifelock.com",
+            "symantecliveupdate.com", "liveupdate.symantecliveupdate.com",
+            # Microsoft Defender. Under microsoft.com but named so that
+            # blocking the parent does not take the endpoint protection with it.
+            "wdcp.microsoft.com", "wdcpalt.microsoft.com",
+            "wd.microsoft.com", "smartscreen.microsoft.com",
+            "urs.microsoft.com", "definitionupdates.microsoft.com",
+            # The rest of the consumer and small-business field.
+            "bitdefender.com", "bitdefender.net",
+            "kaspersky.com", "kaspersky-labs.com", "kasperskylabs.com",
+            "eset.com", "eset.eu",
+            "avast.com", "avcdn.net", "avg.com", "ff.avast.com",
+            "malwarebytes.com", "mwbsys.com",
+            "trendmicro.com",
+            "sophos.com", "sophosxl.net", "sophosupd.com",
+            "f-secure.com", "withsecure.com",
+            "webroot.com", "webrootcloudav.com",
+            "avira.com", "avira-update.com",
+            "drweb.com",
+            "gdatasoftware.com",
+            "pandasecurity.com", "watchguard.com",
+            "clamav.net",
+            "crowdstrike.com",
+            "sentinelone.net",
+        ),
+    ),
 )
 
 

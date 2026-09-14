@@ -322,5 +322,52 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(guard.match("pool.ntp.org"))
 
 
+class SecuritySoftwareTests(unittest.TestCase):
+    """Blocking an antivirus makes the machine less safe, not more."""
+
+    def setUp(self):
+        self.guard = CompatibilityGuard()
+
+    def test_the_major_vendors_are_protected(self):
+        for name in (
+            "update.nai.com",                       # McAfee, historic host
+            "gti.mcafee.com",                       # McAfee reputation
+            "liveupdate.symantecliveupdate.com",    # Norton
+            "wdcp.microsoft.com",                   # Defender cloud protection
+            "definitionupdates.microsoft.com",      # Defender signatures
+            "sophosxl.net",                         # Sophos live lookup
+            "guard.avast.com",
+            "cloud.bitdefender.net",
+            "dnl-01.geo.kaspersky.com",
+            "update.eset.com",
+            "keystone.mwbsys.com",                  # Malwarebytes services
+            "iaus.eset.com",
+        ):
+            with self.subTest(name=name):
+                self.assertTrue(self.guard.match(name), f"{name} must not be blocked")
+
+    def test_it_is_reported_as_an_essential_service(self):
+        service = self.guard.explain("update.nai.com")
+        self.assertIsNotNone(service)
+        self.assertEqual(service.key, "security-software")
+
+    def test_ordinary_names_are_unaffected(self):
+        for name in ("ads.doubleclick.net", "tracker.example.com", "example.com"):
+            with self.subTest(name=name):
+                self.assertFalse(self.guard.match(name))
+
+    def test_the_category_can_be_turned_off(self):
+        guard = CompatibilityGuard(exclude_services={"security-software"})
+        self.assertFalse(guard.match("update.nai.com"))
+        # And turning it off does not disturb the others.
+        self.assertTrue(guard.match("pool.ntp.org"))
+
+    def test_a_vendor_domain_covers_its_subdomains(self):
+        # Vendors spread updates and reputation across many hosts, and the
+        # list cannot enumerate them.
+        self.assertTrue(self.guard.match("anything.mcafee.com"))
+        self.assertTrue(self.guard.match("a.b.c.sophos.com"))
+
+
 if __name__ == "__main__":
     unittest.main()

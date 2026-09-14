@@ -203,6 +203,47 @@ id = "192.168.1.55"
 group = "unfiltered"
 ```
 
+## Antivirus and endpoint security
+
+Security software is the one class of program where blocking it makes the
+machine *less* safe, so it is protected ahead of every blocklist, alongside
+time and certificate status. McAfee, Norton, Microsoft Defender, Bitdefender,
+Kaspersky, ESET, Avast, AVG, Malwarebytes, Trend Micro, Sophos, F-Secure,
+Webroot, Avira, Dr.Web, G DATA, Panda, ClamAV, CrowdStrike and SentinelOne are
+all covered by the `security-software` service.
+
+Two things it needs, and neither announces itself when blocked:
+
+- **Signature updates.** A blocked update endpoint does not produce an error a
+  user sees. The product keeps running with definitions that quietly stop
+  being current.
+- **Cloud reputation lookups.** Asked about files and sites the product has
+  not seen before. Blocked, most implementations fail open — so the lookup
+  that was supposed to catch something new simply does not happen.
+
+This does mean the vendors' own telemetry rides along on the same domains.
+That is a real cost and it is the right trade: a stale antivirus is worse than
+a vendor knowing its product is installed. If you disagree for a particular
+vendor, `compatibility.unprotect = ["security-software"]` turns the whole
+category off and the blocklists apply as normal.
+
+### When the antivirus does its own DNS filtering
+
+Several suites — Norton 360, McAfee WebAdvisor, Avast and Kaspersky among them
+— install web protection that intercepts DNS locally or runs a local proxy.
+That happens *on the device*, before anything reaches SymbiVPN, so:
+
+- the device may not use SymbiVPN's resolver at all, and nothing on the
+  network can make it;
+- or both filter, and a site blocked by either is blocked, which is usually
+  fine but makes "why was this blocked?" ambiguous.
+
+`symbivpn fieldtest` run **on that device** reports whether its DNS is being
+intercepted. If it is, and you would rather SymbiVPN did the filtering, turn
+off the web-protection component of the suite — not the antivirus itself.
+Gateway mode redirects port 53, which catches a device with a hardcoded
+resolver, but it cannot catch software that never puts a DNS query on the wire.
+
 ## Other things that trip devices up
 
 **IPv6.** In gateway mode, client IPv6 is *rejected* rather than dropped. A drop
