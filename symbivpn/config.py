@@ -392,6 +392,41 @@ def _populate(target: Any, values: dict[str, Any], section: str) -> None:
         setattr(target, key, value)
 
 
+#: Two-label endings that are public suffixes rather than somebody's domain.
+#: Not the whole Public Suffix List -- that is a dependency and a download --
+#: but the ones a person might plausibly type by mistake.
+_PUBLIC_SUFFIXES = frozenset({
+    "co.uk", "org.uk", "me.uk", "ac.uk", "gov.uk", "net.uk", "sch.uk",
+    "com.au", "net.au", "org.au", "edu.au", "gov.au",
+    "co.nz", "net.nz", "org.nz", "co.za", "org.za",
+    "com.br", "com.mx", "com.ar", "com.cn", "net.cn", "org.cn",
+    "co.jp", "ne.jp", "or.jp", "co.kr", "or.kr", "co.in", "net.in",
+    "com.tr", "com.sg", "com.hk", "com.tw", "com.my", "com.ph",
+    "co.il", "com.pl", "com.ua", "com.ru", "com.es", "com.pt",
+})
+
+
+def _refuse_whole_suffix(entry: str, setting: str) -> None:
+    """Reject an allow rule that would cover an entire public suffix."""
+    cleaned = entry.strip().lower().lstrip("*").strip(".")
+    if not cleaned:
+        return
+    labels = cleaned.split(".")
+    if len(labels) == 1:
+        raise ConfigError(
+            f"{setting} contains {entry!r}, which allows every domain ending "
+            f"in .{cleaned} -- the whole top-level domain, ahead of every rule "
+            f"you have written. Name the domain you meant, such as "
+            f"example.{cleaned}."
+        )
+    if cleaned in _PUBLIC_SUFFIXES:
+        raise ConfigError(
+            f"{setting} contains {entry!r}, which is a public suffix rather "
+            f"than a domain: it allows every site registered under it. Name "
+            f"the domain you meant, such as example.{cleaned}."
+        )
+
+
 def _validate(config: Config) -> None:
     if not 1 <= config.server.port <= 65_535:
         raise ConfigError(f"server.port must be 1-65535, got {config.server.port}")
@@ -495,6 +530,18 @@ def _validate(config: Config) -> None:
                 f"compatibility.devices names unknown profile {key!r}; "
                 f"valid profiles are {', '.join(PROFILE_KEYS)}, or \"all\""
             )
+
+    # An allow rule is a suffix rule, and a compatibility allow rule beats
+    # every blocklist, group rule and schedule there is. So `*.com` here is not
+    # a slightly wide rule -- it is the filter switched off for most of the
+    # web, silently, from one plausible typo.
+    for entry in config.compatibility.allow:
+        _refuse_whole_suffix(entry, "compatibility.allow")
+    for entry in config.blocklists.allow:
+        _refuse_whole_suffix(entry, "blocklists.allow")
+    for name, group in config.groups.items():
+        for entry in group.allow:
+            _refuse_whole_suffix(entry, f"groups.{name}.allow")
 
     if config.cluster.enabled:
         if not config.cluster.secret:

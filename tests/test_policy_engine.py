@@ -473,5 +473,53 @@ class HostnameIdentityTests(unittest.TestCase):
         self.assertEqual(engine.group_for("10.42.7.50").name, "narrow")
 
 
+class WholeSuffixAllowTests(unittest.TestCase):
+    """An allow rule is a suffix rule, so a TLD in one switches filtering off.
+
+    A compatibility allow rule beats every blocklist, group rule and schedule,
+    so `*.com` there is not a wide rule -- it is the filter off for most of the
+    web, from one plausible typo, silently.
+    """
+
+    def refused(self, raw):
+        with self.assertRaises(ConfigError) as caught:
+            config_module.from_mapping(raw)
+        return str(caught.exception)
+
+    def test_a_bare_tld_is_refused(self):
+        for entry in ("com", "*.com", ".com", "*.NET", "org"):
+            with self.subTest(entry=entry):
+                message = self.refused({"compatibility": {"allow": [entry]}})
+                self.assertIn("top-level domain", message)
+
+    def test_a_public_suffix_is_refused(self):
+        message = self.refused({"compatibility": {"allow": ["*.co.uk"]}})
+        self.assertIn("public suffix", message)
+
+    def test_the_same_rule_holds_for_blocklist_allows(self):
+        self.assertIn("top-level domain",
+                      self.refused({"blocklists": {"allow": ["net"]}}))
+
+    def test_the_same_rule_holds_for_a_group_allow(self):
+        message = self.refused(
+            {"groups": {"kids": {"allow": ["com"]}}}
+        )
+        self.assertIn("top-level domain", message)
+
+    def test_real_domains_are_accepted(self):
+        for entry in ("example.com", "*.corp.example.com", "example.co.uk",
+                      "a.b.c.example.org"):
+            with self.subTest(entry=entry):
+                config_module.from_mapping({"compatibility": {"allow": [entry]}})
+
+    def test_empty_and_punctuation_only_entries_are_ignored(self):
+        for entry in ("", "  ", "*", ".", "*."):
+            with self.subTest(entry=entry):
+                config_module.from_mapping({"compatibility": {"allow": [entry]}})
+
+    def test_the_message_suggests_what_was_meant(self):
+        self.assertIn("example.com", self.refused({"compatibility": {"allow": ["com"]}}))
+
+
 if __name__ == "__main__":
     unittest.main()
