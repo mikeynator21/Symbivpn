@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import hmac
+import http.cookies
 import json
 import logging
 import mimetypes
@@ -25,7 +26,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, TYPE_CHECKING
 
-from .auth import AdminToken, AttemptLimiter, is_hashed, looks_local, verify_password
+from .auth import (
+    AdminToken,
+    AttemptLimiter,
+    SessionStore,
+    is_hashed,
+    looks_local,
+    verify_password,
+)
 from .vpn import qr
 from .vpn.wireguard import WireGuardError
 
@@ -42,6 +50,14 @@ MAX_BODY = 256 * 1024
 #: paths and configuration values, and the caller has no use for either.
 _INTERNAL_ERROR = "internal error; see the service log"
 
+#: The session cookie. Not `Secure`: the dashboard speaks plain HTTP on the
+#: local network, and a Secure cookie would simply never be sent. `SameSite`
+#: is what carries the weight instead -- the browser will not attach this to a
+#: request another site caused, which is what a cookie reintroduces and Basic
+#: authentication did not have.
+SESSION_COOKIE = "symbivpn_session"
+COOKIE_ATTRIBUTES = "HttpOnly; SameSite=Strict; Path=/"
+
 
 class Dashboard:
     """Runs the HTTP server for one application instance."""
@@ -52,14 +68,18 @@ class Dashboard:
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._limiter = AttemptLimiter()
+        #: Logged-in browsers, so a phone is asked once rather than every time.
+        self.sessions = SessionStore()
         # Lets the CLI on this machine authenticate without the password,
         # which it only has the hash of.
         self._token = AdminToken(application.config.state_dir)
 
     def start(self) -> None:
         if self.config.password:
-            # Bound to the password, so changing the password revokes the token.
+            # Bound to the password, so changing the password revokes the token
+            # and ends every browser session issued under the old one.
             self._token.load_or_create(self.config.password)
+            self.sessions.bind(self.config.password)
         handler = _make_handler(self)
         try:
             self._server = ThreadingHTTPServer((self.config.address, self.config.port), handler)
@@ -100,9 +120,16 @@ class Dashboard:
 
     # -- authentication ---------------------------------------------------
 
-    def authorised(self, header: str | None, client: str = "") -> tuple[bool, str]:
+    def authorised(
+        self, header: str | None, client: str = "", cookie: str = ""
+    ) -> tuple[bool, str]:
         """Check credentials. Returns (allowed, reason-if-not)."""
         if not self.config.password:
+            return True, ""
+
+        # A live session first: it is the common case for a browser, and it
+        # costs a comparison rather than a deliberately slow password hash.
+        if cookie and self.sessions.validate(cookie):
             return True, ""
 
         remaining = self._limiter.locked_out(client) if client else 0.0
@@ -191,6 +218,30 @@ def _make_handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
                 raise ValueError("request body must be a JSON object")
             return payload
 
+        def _session_cookie(self) -> str:
+            """The session token this request carries, if any."""
+            raw = self.headers.get("Cookie")
+            if not raw:
+                return ""
+            try:
+                jar = http.cookies.SimpleCookie()
+                jar.load(raw)
+            except http.cookies.CookieError:
+                # A malformed Cookie header is not a reason to fail the
+                # request; it just means there is no session in it.
+                return ""
+            morsel = jar.get(SESSION_COOKIE)
+            return morsel.value if morsel else ""
+
+        def _logged_in(self) -> bool:
+            """Whether this request is already authorised, without answering it."""
+            allowed, _ = dashboard.authorised(
+                self.headers.get("Authorization"),
+                self.client_address[0],
+                self._session_cookie(),
+            )
+            return allowed
+
         def _authorise(self, *, write: bool) -> bool:
             if write and dashboard.config.readonly:
                 self._error(HTTPStatus.FORBIDDEN, "the dashboard is in read-only mode")
@@ -216,7 +267,9 @@ def _make_handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
                     return False
 
             allowed, reason = dashboard.authorised(
-                self.headers.get("Authorization"), self.client_address[0]
+                self.headers.get("Authorization"),
+                self.client_address[0],
+                self._session_cookie(),
             )
             if allowed:
                 return True
@@ -241,12 +294,12 @@ def _make_handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
 
             try:
                 if not path.startswith("/api"):
-                    # The page is behind the same authentication as the API.
-                    # Without this the browser never prompts -- a 401 from
-                    # fetch() does not raise the credentials dialog, only a
-                    # top-level navigation does -- and the dashboard would
-                    # load and then sit empty for ever.
-                    if not self._authorise(write=False):
+                    # The page is behind the same authentication as the API,
+                    # but a browser gets a form rather than the Basic prompt:
+                    # the prompt reappears at the browser's whim, cannot be
+                    # logged out of, and sends the password on every request.
+                    if not self._logged_in():
+                        self._serve_login()
                         return
                     self._serve_static(path)
                     return
@@ -270,6 +323,11 @@ def _make_handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path.rstrip("/") or "/"
             try:
+                # Logging in is the one write that cannot require being logged
+                # in. It is still rate-limited, and still has to be JSON.
+                if path == "/api/login":
+                    self._post_login()
+                    return
                 if not self._authorise(write=True):
                     return
                 body = self._body()
@@ -334,7 +392,82 @@ def _make_handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
                 "/api/blocklists/refresh": self._post_refresh,
                 "/api/cache/flush": self._post_flush,
                 "/api/vpn/peers": self._post_peer,
+                "/api/logout": self._post_logout,
             }.get(path)
+
+        # -- sessions -----------------------------------------------------
+
+        def _post_login(self) -> None:
+            """Exchange the password for a session cookie."""
+            client = self.client_address[0]
+            if not dashboard.config.password:
+                # Nothing to log in to; the dashboard is open by configuration.
+                self._json({"logged_in": True, "password_required": False})
+                return
+
+            content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip()
+            if content_type != "application/json":
+                self._error(
+                    HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "send the password as application/json"
+                )
+                return
+
+            remaining = dashboard._limiter.locked_out(client)
+            if remaining:
+                self._error(
+                    HTTPStatus.TOO_MANY_REQUESTS,
+                    f"too many failed attempts; try again in {int(remaining)}s",
+                )
+                return
+
+            try:
+                body = self._body()
+            except ValueError as exc:
+                self._error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+
+            password = str(body.get("password", ""))
+            if not password or not verify_password(password, dashboard.config.password):
+                if dashboard._limiter.record_failure(client):
+                    log.warning("locking out %s after repeated failed dashboard logins", client)
+                self._error(HTTPStatus.UNAUTHORIZED, "wrong password")
+                return
+
+            dashboard._limiter.record_success(client)
+            token, lifetime = dashboard.sessions.create(
+                (self.headers.get("User-Agent") or "").strip()
+            )
+            self._send(
+                HTTPStatus.OK,
+                json.dumps({"logged_in": True}).encode(),
+                extra={
+                    "Set-Cookie": (
+                        f"{SESSION_COOKIE}={token}; Max-Age={lifetime}; {COOKIE_ATTRIBUTES}"
+                    )
+                },
+            )
+
+        def _post_logout(self, _body: dict) -> None:
+            """End this browser's session, and clear the cookie."""
+            dashboard.sessions.revoke(self._session_cookie())
+            self._send(
+                HTTPStatus.OK,
+                json.dumps({"logged_in": False}).encode(),
+                extra={"Set-Cookie": f"{SESSION_COOKIE}=; Max-Age=0; {COOKIE_ATTRIBUTES}"},
+            )
+
+        def _serve_login(self) -> None:
+            """The login form. 401, so a script still sees a refusal."""
+            try:
+                page = (WEB_ROOT / "login.html").read_bytes()
+            except OSError:
+                page = b"<h1>SymbiVPN</h1><p>A password is required.</p>"
+            # No WWW-Authenticate header: that is what summons the browser's
+            # own credential box, which is the thing being replaced.
+            self._send(
+                HTTPStatus.UNAUTHORIZED, page, "text/html; charset=utf-8",
+                extra={"Cache-Control": "no-store"},
+            )
 
         # -- static -------------------------------------------------------
 
@@ -361,7 +494,12 @@ def _make_handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
         # -- read endpoints -----------------------------------------------
 
         def _get_status(self, _query: dict) -> None:
-            self._json(application.status())
+            # `password_required` is what tells the page whether to offer a
+            # sign-out: with no password there is no session to end.
+            self._json({
+                **application.status(),
+                "password_required": bool(dashboard.config.password),
+            })
 
         def _get_savings(self, _query: dict) -> None:
             self._json(application.savings())

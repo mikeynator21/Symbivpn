@@ -250,3 +250,124 @@ class AdminToken:
 def looks_local(address: str) -> bool:
     """Whether an address means "this machine only"."""
     return address in ("127.0.0.1", "::1", "localhost", "")
+
+
+class Session:
+    """One logged-in browser."""
+
+    __slots__ = ("token", "created_at", "expires_at", "label")
+
+    def __init__(self, token: str, created_at: float, expires_at: float, label: str) -> None:
+        self.token = token
+        self.created_at = created_at
+        self.expires_at = expires_at
+        self.label = label
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "label": self.label,
+            "created_at": self.created_at,
+            "expires_in": max(0, int(self.expires_at - time.time())),
+        }
+
+
+class SessionStore:
+    """Browser sessions for the dashboard.
+
+    HTTP Basic authentication is what a command-line client wants and what a
+    phone handles worst: the browser re-asks whenever it feels like it, there
+    is no way to log out, and the password rides on every single request. A
+    session cookie is the right shape for a person on a phone -- log in once,
+    stay logged in, log out when you mean to -- and it keeps the password off
+    every request after the first.
+
+    Sessions are held in memory and nowhere else. Restarting the service logs
+    everyone out, which is the honest trade for never writing anything
+    password-equivalent to disk; a gateway restarts rarely, and logging in
+    again is a few seconds.
+    """
+
+    #: How long a session lasts without being used. Long, deliberately: the
+    #: whole point is not being asked again on a phone.
+    LIFETIME = 30 * 86_400
+    #: Ceiling on concurrent sessions, so a login loop cannot grow this.
+    MAX_SESSIONS = 32
+
+    def __init__(self) -> None:
+        self._sessions: dict[str, Session] = {}
+        self._lock = threading.Lock()
+        self._issued_for = ""
+
+    def bind(self, password: str) -> None:
+        """Tie sessions to the configured password.
+
+        Changing the password is how someone revokes access, so sessions
+        issued under the old one must not outlive it -- the same rule the
+        local admin token follows.
+        """
+        fingerprint = AdminToken.fingerprint(password)
+        with self._lock:
+            ended = len(self._sessions)
+            if self._issued_for and self._issued_for != fingerprint and ended:
+                self._sessions.clear()
+                log.info(
+                    "the dashboard password changed, so %d browser session(s) were ended",
+                    ended,
+                )
+            self._issued_for = fingerprint
+
+    def create(self, label: str = "") -> tuple[str, int]:
+        """Start a session. Returns (token, lifetime-in-seconds)."""
+        now = time.time()
+        token = secrets.token_urlsafe(32)
+        with self._lock:
+            self._prune(now)
+            if len(self._sessions) >= self.MAX_SESSIONS:
+                # Drop the one that will expire first rather than refuse the
+                # login: being unable to log in is a worse failure than
+                # signing out the oldest device.
+                oldest = min(self._sessions.values(), key=lambda s: s.expires_at)
+                del self._sessions[oldest.token]
+            self._sessions[token] = Session(token, now, now + self.LIFETIME, label[:60])
+        return token, self.LIFETIME
+
+    def validate(self, token: str) -> bool:
+        """Whether this token names a live session."""
+        if not token:
+            return False
+        now = time.time()
+        with self._lock:
+            self._prune(now)
+            # Compared one by one rather than by dictionary lookup: `==` on
+            # strings stops at the first wrong byte, and there is no reason to
+            # answer a guess in a time that depends on how close it was.
+            for session in self._sessions.values():
+                if hmac.compare_digest(session.token, token):
+                    return True
+        return False
+
+    def revoke(self, token: str) -> bool:
+        with self._lock:
+            for session in list(self._sessions.values()):
+                if hmac.compare_digest(session.token, token):
+                    del self._sessions[session.token]
+                    return True
+        return False
+
+    def revoke_all(self) -> int:
+        with self._lock:
+            count = len(self._sessions)
+            self._sessions.clear()
+        return count
+
+    def active(self) -> list[dict[str, object]]:
+        now = time.time()
+        with self._lock:
+            self._prune(now)
+            return [session.as_dict() for session in self._sessions.values()]
+
+    def _prune(self, now: float) -> None:
+        """Drop expired sessions. Caller holds the lock."""
+        for token, session in list(self._sessions.items()):
+            if now >= session.expires_at:
+                del self._sessions[token]

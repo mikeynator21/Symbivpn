@@ -50,6 +50,11 @@ header .spacer { flex: 1; }
   border: 1px solid var(--line); color: var(--muted);
 }
 .badge.live { color: var(--allow); border-color: currentColor; }
+.badge.linkish {
+  font: inherit; font-size: 12px; background: none; cursor: pointer;
+  color: var(--muted); border: 1px solid var(--line);
+}
+.badge.linkish:hover { color: var(--ink); border-color: var(--muted); }
 .badge.down { color: var(--block); border-color: currentColor; }
 main { padding: 20px; max-width: 1200px; margin: 0 auto; }
 .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
@@ -106,6 +111,9 @@ button:disabled { opacity: 0.5; cursor: default; }
   <span class="badge" id="uptime">—</span>
   <span class="spacer"></span>
   <span class="badge" id="health">connecting</span>
+  <!-- Hidden unless a password is configured: with no password there is no
+       session to end, and a button that does nothing is worse than none. -->
+  <button class="badge linkish" id="signout" type="button" hidden>Sign out</button>
 </header>
 
 <div class="error-banner" id="banner" hidden></div>
@@ -224,6 +232,18 @@ function cell(text, className) {
   return td;
 }
 
+document.getElementById("signout").addEventListener("click", async () => {
+  try {
+    await fetch("/api/logout", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: "{}",
+    });
+  } catch (problem) { /* the cookie is cleared server-side either way */ }
+  // Back to "/", which now answers with the login page.
+  window.location.replace("/");
+});
+
 async function refreshStatus() {
   const status = await api("/api/status");
   const counters = status.counters;
@@ -232,6 +252,7 @@ async function refreshStatus() {
   $("uptime").textContent = `up ${duration(status.uptime_seconds)}`;
   $("health").textContent = "live";
   $("health").className = "badge live";
+  $("signout").hidden = !status.password_required;
 
   $("total").textContent = number(counters.total);
   $("blocked").textContent = number(counters.blocked);

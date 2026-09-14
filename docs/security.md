@@ -115,7 +115,18 @@ whatever else the machine runs (ssh, say) keeps working; the point is that
 nothing *we* opened answers the hotel LAN. Clients on the hotspot reach the
 internet through that network without reaching the hosts on it.
 
-**The dashboard as an attack surface.** A state-changing POST must be
+**The dashboard as an attack surface.** Signing in exchanges the password for
+a session cookie, so it is sent once rather than on every request. The cookie
+is `HttpOnly` (script cannot read it) and `SameSite=Strict` (the browser will
+not attach it to a request another site caused). It is deliberately *not*
+`Secure`: the dashboard speaks plain HTTP on the local network, and a Secure
+cookie would simply never be sent — `SameSite` is what carries the weight.
+Sessions live in memory only, are capped, expire, and are all ended the moment
+the password changes; a restart signs everyone out, which is the trade for
+never writing anything password-equivalent to disk. Basic authentication still
+works, for the CLI and for `curl`.
+
+A state-changing POST must be
 `application/json`, which a form cannot send and which needs a CORS preflight
 nothing here answers — so a page on your network cannot make a logged-in
 browser change settings on its behalf. Failed logins are rate-limited per

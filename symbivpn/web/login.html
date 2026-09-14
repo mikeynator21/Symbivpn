@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SymbiVPN</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --ink: #14171c;
+  --muted: #5c6673;
+  --line: #e3e7ec;
+  --accent: #2f6feb;
+  --block: #d1453b;
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171c;
+    --panel: #1c2027;
+    --ink: #e6e9ee;
+    --muted: #9aa4b2;
+    --line: #2a2f38;
+    --accent: #5a8dfb;
+    --block: #f0675c;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+main {
+  width: 100%;
+  max-width: 360px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 28px 24px;
+}
+h1 { margin: 0 0 4px; font-size: 20px; }
+p.sub { margin: 0 0 20px; color: var(--muted); }
+label { display: block; margin-bottom: 6px; font-weight: 600; }
+input {
+  width: 100%;
+  padding: 11px 12px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+button {
+  width: 100%;
+  margin-top: 14px;
+  padding: 11px 12px;
+  font: inherit;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+button:disabled { opacity: .6; cursor: default; }
+.error {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: var(--block);
+  border: 1px solid var(--block);
+  background: color-mix(in srgb, var(--block) 8%, transparent);
+}
+.note { margin-top: 18px; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>SymbiVPN</h1>
+  <p class="sub">Sign in to the dashboard.</p>
+
+  <form id="form">
+    <label for="password">Password</label>
+    <!-- autofocus is deliberate on a phone: one tap less. -->
+    <input id="password" name="password" type="password" autocomplete="current-password"
+           autofocus required>
+    <button id="submit" type="submit">Sign in</button>
+  </form>
+
+  <div id="error" class="error" hidden></div>
+  <p class="note">You will stay signed in on this device until you sign out.</p>
+</main>
+
+<script>
+const form = document.getElementById("form");
+const field = document.getElementById("password");
+const button = document.getElementById("submit");
+const error = document.getElementById("error");
+
+function fail(message) {
+  error.textContent = message;
+  error.hidden = false;
+  button.disabled = false;
+  field.select();
+}
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  error.hidden = true;
+  button.disabled = true;
+  let response;
+  try {
+    response = await fetch("/api/login", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({password: field.value}),
+    });
+  } catch (problem) {
+    fail("Could not reach SymbiVPN. Is it still running?");
+    return;
+  }
+  if (response.ok) {
+    // The cookie is set; reload into the dashboard itself.
+    window.location.replace("/");
+    return;
+  }
+  let message = "Wrong password.";
+  try {
+    const body = await response.json();
+    if (body && body.error) message = body.error;
+  } catch (problem) { /* keep the default */ }
+  fail(message);
+});
+</script>
+</body>
+</html>
