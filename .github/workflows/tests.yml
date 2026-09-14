@@ -57,7 +57,16 @@ jobs:
     # ap0" and then hears nothing. The same commit passes 66 of 66 in two
     # different local environments.
     #
-    # Until that is understood it must not be able to pass silently either, so
+    # Ruled out so far, each with evidence rather than argument:
+    #   * a start-up race -- the wait is on the sockets now, not a sleep;
+    #   * a lost request -- the client retransmits four times over 7.5s;
+    #   * the kernel's bridge behaviour -- preflight.py passes on the runner,
+    #     including a broadcast into a socket bound with SO_BINDTODEVICE;
+    #   * rp_filter and IP forwarding -- neither breaks it when set locally;
+    #   * SymbiVPN's own nftables ruleset -- loading it does not break it.
+    # The first two were real bugs and are fixed regardless.
+    #
+    # Until it is understood it must not be able to pass silently either, so
     # the result stays visible in every run. Run it locally before trusting a
     # change to the gateway: sudo ./tests/integration/run.sh
     continue-on-error: true

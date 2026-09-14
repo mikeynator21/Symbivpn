@@ -390,7 +390,11 @@ Stated here rather than left to be discovered:
   The gateway is demonstrably healthy in those runs — the ruleset loads, the
   input chain accepts DHCP, both bridge ports are forwarding, and the server
   reports it is serving and then hears nothing — so this is the harness
-  meeting a different kernel, not the filter misbehaving. Run it yourself
+  meeting a different environment, not the filter misbehaving.
+  `tests/integration/preflight.py` checks the one piece of kernel behaviour
+  the testbed rests on and passes there, which rules out the obvious
+  explanation; a start-up race, a lost request, `rp_filter`, IP forwarding and
+  SymbiVPN's own ruleset are all ruled out too. Run the testbed yourself
   before trusting a change to the gateway.
 
 ## Requirements
