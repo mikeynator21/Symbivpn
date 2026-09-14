@@ -959,6 +959,40 @@ def command_harden(args: argparse.Namespace, cfg: Config) -> int:
         note("medium", "Per-client rate limiting is off.",
              "Set server.rate_limit to something like 100.")
 
+    # -- who a device is claimed to be ------------------------------------
+    # A hostname is DHCP option 12: the device sends it about itself. Matching
+    # on it is a convenience, not an identity check, and the difference only
+    # matters when the rule is what keeps a device restricted.
+    import ipaddress as _ipaddress
+    import re as _re
+
+    for device in cfg.devices:
+        identifier = device.identifier.strip().lower()
+        if not identifier:
+            continue
+        if _re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", identifier):
+            continue
+        try:
+            if "/" in identifier:
+                _ipaddress.ip_network(identifier, strict=False)
+            else:
+                _ipaddress.ip_address(identifier)
+            continue
+        except ValueError:
+            pass
+
+        target = cfg.groups.get(device.group)
+        escapes_filtering = target is not None and not target.filtering
+        note(
+            "high" if escapes_filtering else "medium",
+            f"Device rule {device.identifier!r} matches on hostname, and puts "
+            f"matching devices in {device.group!r}"
+            + (", which has filtering off." if escapes_filtering else "."),
+            "A device chooses its own hostname, so anyone who can rename a "
+            "phone can land in that group. Use its IP, a reserved DHCP "
+            "address, or its MAC if the rule is meant to restrict.",
+        )
+
     # -- upstream ---------------------------------------------------------
     if not cfg.upstream.require_encrypted:
         note("high", "Plaintext DNS upstreams are permitted.",

@@ -135,6 +135,15 @@ happened; the detail goes to the log, because exception text routinely carries
 file paths and configuration values. Static files are served only from within
 the web root, checked after resolving symlinks.
 
+**A device claiming to be another device.** Groups can be keyed on a hostname
+pattern, and a hostname is something the device sends about itself — so that
+match is a convenience, not an identity check. Renaming a phone is enough to
+land in a different group, which matters when the rule is what keeps the
+device restricted rather than merely labelled. Keyed on an IP, a reserved
+DHCP address or a MAC, the claim is at least not the device's to make freely.
+`symbivpn harden` reports every hostname rule, and reports it as high when the
+group it selects has filtering off.
+
 **A peer name as an injection vector.** The name a VPN peer is given is not
 just a label: it goes into the generated `.conf`, into the filename that config
 downloads as, and into a `Content-Disposition` header. A newline in it would

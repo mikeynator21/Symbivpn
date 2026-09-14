@@ -74,6 +74,11 @@ jobs:
           echo "DHCP does not traverse the veth bridge here; the gateway comes"
           echo "up correctly and hears nothing. Run it locally to trust it:"
           echo "  sudo ./tests/integration/run.sh"
+      - name: Can this runner even carry a broadcast across a bridge?
+        # Isolates the one piece of kernel behaviour the testbed rests on,
+        # independently of SymbiVPN. Three guesses at the CI failure were
+        # wrong; this asks the question directly instead.
+        run: sudo python3 tests/integration/preflight.py
       - name: Run the testbed
         # Root, because it builds network namespaces and loads nftables rules.
         # The runner's own python3 is used: sudo resets PATH, and ubuntu-latest

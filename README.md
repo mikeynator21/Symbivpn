@@ -268,6 +268,13 @@ Devices are grouped by IP, subnet, MAC or hostname pattern, and each group gets
 its own rules — categories, schedules, safe search, or a default-deny list for
 IoT devices that should only ever reach their vendor.
 
+**Identify by address or MAC when the rule is what restricts a device.** A
+hostname is DHCP option 12 — the device sends it about itself — so a hostname
+pattern is a convenience, not proof of identity. A child who renames a tablet
+in Settings to match a grown-up rule lands in that group. `symbivpn harden`
+flags hostname rules for this reason, and flags them loudly when the group
+they point at has filtering off.
+
 ```toml
 [groups.kids]
 block_categories = ["adult", "gambling", "social"]

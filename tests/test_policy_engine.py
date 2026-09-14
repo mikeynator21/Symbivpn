@@ -419,5 +419,59 @@ class EngineRobustnessTests(unittest.TestCase):
         )
 
 
+class HostnameIdentityTests(unittest.TestCase):
+    """A hostname is what the device says it is, not what it is."""
+
+    def build(self):
+        groups = {
+            "default": Group("default", block=["adult-site.example"]),
+            "grownups": Group("grownups"),
+        }
+        return PolicyEngine(
+            groups=groups,
+            devices=[Device(identifier="mikes-laptop*", group="grownups")],
+        )
+
+    def group_after_renaming(self, hostname):
+        engine = self.build()
+        engine.note_client("10.42.7.50", mac="", hostname=hostname)
+        return engine.group_for("10.42.7.50").name
+
+    def test_an_honest_name_lands_in_the_default_group(self):
+        self.assertEqual(self.group_after_renaming("kids-tablet"), "default")
+
+    def test_renaming_the_device_moves_it(self):
+        # Documented rather than prevented: the admin chose to match on a
+        # hostname. `harden` is what says this out loud.
+        self.assertEqual(self.group_after_renaming("mikes-laptop"), "grownups")
+
+    def test_an_address_rule_is_not_moved_by_a_hostname(self):
+        engine = PolicyEngine(
+            groups={"default": Group("default"), "grownups": Group("grownups")},
+            devices=[Device(identifier="10.42.7.50", group="default")],
+        )
+        engine.note_client("10.42.7.50", mac="", hostname="mikes-laptop")
+        self.assertEqual(engine.group_for("10.42.7.50").name, "default")
+
+    def test_a_mac_rule_beats_a_hostname_rule(self):
+        engine = PolicyEngine(
+            groups={"default": Group("default"), "kids": Group("kids"),
+                    "grownups": Group("grownups")},
+            devices=[Device(identifier="aa:bb:cc:dd:ee:ff", group="kids"),
+                     Device(identifier="mikes-laptop*", group="grownups")],
+        )
+        engine.note_client("10.42.7.50", mac="AA:BB:CC:DD:EE:FF", hostname="mikes-laptop")
+        self.assertEqual(engine.group_for("10.42.7.50").name, "kids")
+
+    def test_the_most_specific_network_wins(self):
+        engine = PolicyEngine(
+            groups={"default": Group("default"), "wide": Group("wide"),
+                    "narrow": Group("narrow")},
+            devices=[Device(identifier="10.42.0.0/16", group="wide"),
+                     Device(identifier="10.42.7.0/24", group="narrow")],
+        )
+        self.assertEqual(engine.group_for("10.42.7.50").name, "narrow")
+
+
 if __name__ == "__main__":
     unittest.main()
