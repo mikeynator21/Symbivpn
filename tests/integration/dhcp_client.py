@@ -82,19 +82,33 @@ def main() -> int:
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, interface.encode() + b"\0")
     sock.bind(("", 68))
-    sock.settimeout(6)
 
     def exchange(message_type, **kwargs):
-        sock.sendto(build(message_type, mac, xid, **kwargs), ("255.255.255.255", 67))
-        deadline = time.time() + 6
-        while time.time() < deadline:
-            try:
-                payload, _ = sock.recvfrom(2048)
-            except socket.timeout:
-                return None
-            reply = parse(payload)
-            if reply and reply["xid"] == xid:
-                return reply
+        """Send, and keep sending until answered or out of attempts.
+
+        RFC 2131 has the client retransmit with backoff, and every real client
+        does -- dhclient, Android and iOS all retry several times. A single
+        datagram going missing is ordinary, especially on a bridge whose ports
+        were brought up moments ago. Sending once and calling silence a failure
+        made this less robust than any device it stands in for, and turned an
+        unremarkable lost packet into a testbed that fails.
+        """
+        packet = build(message_type, mac, xid, **kwargs)
+        for attempt in range(4):
+            sock.sendto(packet, ("255.255.255.255", 67))
+            deadline = time.time() + 0.5 * (2 ** attempt)
+            while True:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                sock.settimeout(remaining)
+                try:
+                    payload, _ = sock.recvfrom(2048)
+                except socket.timeout:
+                    break
+                reply = parse(payload)
+                if reply and reply["xid"] == xid:
+                    return reply
         return None
 
     offer = exchange(DISCOVER)
