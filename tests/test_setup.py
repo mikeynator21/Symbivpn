@@ -189,3 +189,49 @@ class NextStepsMatchTheMachineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TomlQuotingTests(unittest.TestCase):
+    """Answers typed at a prompt must survive being written to the file.
+
+    A passphrase is exactly where people are encouraged to use punctuation. If
+    a quote makes the file unparseable, or a backslash silently changes the
+    passphrase, the wizard reports success and the person is left with a
+    gateway that will not start -- or a network they cannot join.
+    """
+
+    AWKWARD = [
+        ("plain", "HomeNet", "a-long-passphrase"),
+        ("double quote", 'Bob"s WiFi', 'my"secret"pass'),
+        ("backslash", "Home\\Net", "pass\\word123"),
+        ("both", 'A"B\\C', 'p"a\\ss123'),
+        ("tab", "Home\tNet", "pass\tword1"),
+        ("non-ascii", "Café ☕", "pässphrase"),
+        ("toml-looking", 'x"\nenabled = false\n#', "a-long-passphrase"),
+    ]
+
+    def test_every_answer_round_trips_exactly(self):
+        for label, ssid, passphrase in self.AWKWARD:
+            with self.subTest(label=label):
+                answers = Answers()
+                answers.role = "gateway"
+                answers.hotspot_ssid = ssid
+                answers.hotspot_passphrase = passphrase
+                parsed = tomllib.loads(render(answers))
+                self.assertEqual(parsed["hotspot"]["ssid"], ssid)
+                self.assertEqual(parsed["hotspot"]["passphrase"], passphrase)
+
+    def test_a_quote_cannot_close_the_string_and_add_settings(self):
+        answers = Answers()
+        answers.role = "gateway"
+        answers.hotspot_ssid = 'Net"\nenabled = false'
+        answers.hotspot_passphrase = "a-long-passphrase"
+        parsed = tomllib.loads(render(answers))
+        # The injected setting has to be part of the name, not a setting.
+        self.assertTrue(parsed["hotspot"]["enabled"])
+
+    def test_the_dashboard_address_is_quoted_too(self):
+        answers = Answers()
+        answers.dashboard_address = '127.0.0.1"\nallow_insecure = true'
+        parsed = tomllib.loads(render(answers))
+        self.assertNotIn("allow_insecure", parsed["dashboard"])

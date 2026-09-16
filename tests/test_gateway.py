@@ -986,3 +986,69 @@ class TimeServerRobustnessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HotspotConfigInjectionTests(unittest.TestCase):
+    """Values written into the hostapd file must not be able to become directives."""
+
+    def build(self, **overrides):
+        settings = dict(
+            interface="wlan1", ssid="SymbiVPN", passphrase="a-long-passphrase",
+            subnet=SUBNET,
+        )
+        settings.update(overrides)
+        return hotspot.build_hostapd_config(hotspot.HotspotConfig(**settings))
+
+    def test_a_newline_in_the_ssid_is_refused(self):
+        # hostapd takes the last value for a repeated key, so an SSID carrying
+        # "\nwpa=0" would leave the access point open while the rest of the
+        # file still reads as a WPA3 configuration.
+        with self.assertRaises(hotspot.HotspotError):
+            self.build(ssid="SymbiVPN\nwpa=0\nwpa_key_mgmt=NONE")
+
+    def test_a_newline_in_the_passphrase_is_refused(self):
+        with self.assertRaises(hotspot.HotspotError):
+            self.build(passphrase="passphrase\nwpa=0")
+
+    def test_a_carriage_return_is_refused(self):
+        with self.assertRaises(hotspot.HotspotError):
+            self.build(ssid="SymbiVPN\rwpa=0")
+
+    def test_control_characters_are_refused(self):
+        for field in ("ssid", "passphrase", "interface", "country_code"):
+            with self.subTest(field=field):
+                base = {"ssid": "Net", "passphrase": "a-long-passphrase",
+                        "interface": "wlan1", "country_code": "US"}
+                base[field] = base[field] + "\x00"
+                with self.assertRaises(hotspot.HotspotError):
+                    self.build(**base)
+
+    def test_no_rendered_line_is_ever_an_unexpected_directive(self):
+        # Whatever is accepted, every line of the output has to be one of the
+        # keys this builder means to write.
+        text = self.build(ssid="Cafe ☕", passphrase="a-long-passphrase")
+        keys = {
+            line.split("=", 1)[0]
+            for line in text.splitlines()
+            if line and not line.startswith("#")
+        }
+        self.assertNotIn("", keys)
+        # wpa must appear exactly once, with the value this builder chose.
+        self.assertEqual([l for l in text.splitlines() if l.startswith("wpa=")], ["wpa=2"])
+
+    def test_ssid_length_is_measured_in_bytes(self):
+        # An SSID is 32 octets on the wire. Counting characters would accept a
+        # name hostapd then refuses.
+        self.build(ssid="☕" * 10)  # 30 bytes, fine
+        with self.assertRaises(hotspot.HotspotError):
+            self.build(ssid="☕" * 11)  # 33 bytes
+
+    def test_wpa2_passphrase_length_cap(self):
+        self.build(passphrase="x" * 63)
+        with self.assertRaises(hotspot.HotspotError):
+            self.build(passphrase="x" * 64)
+
+    def test_wpa3_only_allows_a_longer_passphrase(self):
+        # SAE does not derive its key from the passphrase the way WPA2 does,
+        # so the 63-character cap does not apply once WPA2 is dropped.
+        self.build(passphrase="x" * 100, wpa3_only=True)

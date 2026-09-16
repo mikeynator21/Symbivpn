@@ -196,17 +196,49 @@ def interview() -> Answers:
     return answers
 
 
+def _toml_string(value: str) -> str:
+    """Quote a value as a TOML basic string.
+
+    Answers come from a person at a prompt, and a passphrase is exactly the
+    place they are encouraged to use punctuation. Interpolating one straight
+    into quotes means a passphrase containing a quote writes a file that will
+    not parse, and one containing a backslash writes a *different* passphrase
+    than the person typed -- which they then cannot use to join their own
+    network, with nothing on screen to say why.
+    """
+    out = ['"']
+    for character in value:
+        if character in '"\\':
+            out.append("\\" + character)
+        elif character == "\n":
+            out.append("\\n")
+        elif character == "\r":
+            out.append("\\r")
+        elif character == "\t":
+            out.append("\\t")
+        elif character == "\b":
+            out.append("\\b")
+        elif character == "\f":
+            out.append("\\f")
+        elif ord(character) < 0x20 or ord(character) == 0x7F:
+            out.append(f"\\u{ord(character):04X}")
+        else:
+            out.append(character)
+    out.append('"')
+    return "".join(out)
+
+
 def render(answers: Answers) -> str:
     """Turn the answers into a configuration file."""
     lines = [
         "# SymbiVPN configuration, written by `symbivpn setup`.",
         "# Every value here has a comment explaining it in `symbivpn init-config`.",
         "",
-        f'protection = "{answers.protection}"',
+        f"protection = {_toml_string(answers.protection)}",
         "",
         "[server]",
         "listen_addresses = ["
-        + ", ".join(f'"{address}"' for address in answers.listen_addresses)
+        + ", ".join(_toml_string(address) for address in answers.listen_addresses)
         + "]",
         "port = 53",
         "",
@@ -216,21 +248,25 @@ def render(answers: Answers) -> str:
         lines += [
             "[compatibility]",
             "# The minimum each class of device needs in order to work.",
-            "devices = [" + ", ".join(f'"{key}"' for key in answers.devices) + "]",
+            "devices = [" + ", ".join(_toml_string(key) for key in answers.devices) + "]",
             "",
         ]
 
-    lines += ["[dashboard]", f'address = "{answers.dashboard_address}"', "port = 8080"]
+    lines += [
+        "[dashboard]",
+        f"address = {_toml_string(answers.dashboard_address)}",
+        "port = 8080",
+    ]
     if answers.dashboard_password_hash:
-        lines.append(f'password = "{answers.dashboard_password_hash}"')
+        lines.append(f"password = {_toml_string(answers.dashboard_password_hash)}")
     lines.append("")
 
     if answers.role == "gateway":
         lines += [
             "[hotspot]",
             "enabled = true",
-            f'ssid = "{answers.hotspot_ssid}"',
-            f'passphrase = "{answers.hotspot_passphrase}"',
+            f"ssid = {_toml_string(answers.hotspot_ssid)}",
+            f"passphrase = {_toml_string(answers.hotspot_passphrase)}",
             '# Left empty so they are worked out live, and keep working as you',
             '# move between networks.',
             'interface = ""',
@@ -253,7 +289,7 @@ def render(answers: Answers) -> str:
         lines += [
             "[vpn]",
             "enabled = true",
-            f'endpoint = "{answers.vpn_endpoint}"',
+            f"endpoint = {_toml_string(answers.vpn_endpoint)}",
             'subnet = "10.9.0.0/24"',
             "listen_port = 51820",
             "",

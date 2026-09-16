@@ -62,12 +62,59 @@ def nmcli_available() -> bool:
     return shutil.which("nmcli") is not None
 
 
+#: Fields written into the hostapd file as `key=value`, and so unable to carry
+#: a newline without becoming additional directives.
+_VERBATIM_FIELDS = ("interface", "ssid", "passphrase", "country_code")
+
+
+def _reject_control_characters(value: str, field: str) -> None:
+    """Refuse a value that would not survive being written as `key=value`.
+
+    hostapd reads its configuration a line at a time and takes the last value
+    given for a repeated key. A newline anywhere in an SSID or passphrase
+    therefore does not produce a strange network name -- it appends whatever
+    follows as further directives, and `wpa=0` among them turns the access
+    point open while the file still looks like it configures WPA3.
+    """
+    for character in value:
+        if character == "\n" or character == "\r":
+            raise HotspotError(
+                f"hotspot.{field} contains a line break. hostapd reads this file "
+                f"one directive per line, so a value spanning lines would be read "
+                f"as extra directives rather than as part of the value."
+            )
+        if ord(character) < 0x20 or ord(character) == 0x7F:
+            raise HotspotError(
+                f"hotspot.{field} contains a control character "
+                f"(0x{ord(character):02X}), which hostapd cannot represent."
+            )
+
+
 def build_hostapd_config(config: HotspotConfig) -> str:
     """Render a hostapd configuration."""
+    for field in _VERBATIM_FIELDS:
+        _reject_control_characters(getattr(config, field), field)
+
     if len(config.passphrase) < 8:
         raise HotspotError("the hotspot passphrase must be at least 8 characters")
-    if not 1 <= len(config.ssid) <= 32:
-        raise HotspotError("the hotspot SSID must be 1-32 characters")
+    # WPA2 derives its key from the passphrase directly and hostapd caps it at
+    # 63 characters. In transition mode the same passphrase is written for both
+    # WPA2 and SAE, so it has to satisfy the stricter of the two.
+    if not config.wpa3_only and len(config.passphrase) > 63:
+        raise HotspotError(
+            "a WPA2 passphrase may be at most 63 characters. Set "
+            "hotspot.wpa3_only = true to use a longer one, but note that "
+            "devices without WPA3 will then be unable to join."
+        )
+    # An SSID is 32 octets on the wire, not 32 characters: eight emoji are
+    # already 32 bytes, so counting characters would let hostapd refuse a name
+    # this had accepted.
+    encoded = len(config.ssid.encode("utf-8"))
+    if not 1 <= encoded <= 32:
+        raise HotspotError(
+            f"the hotspot SSID must be 1-32 bytes; {config.ssid!r} is {encoded} "
+            f"(non-ASCII characters take more than one byte each)"
+        )
 
     if config.band == "5":
         hw_mode, channel = "a", config.channel or 36

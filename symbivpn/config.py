@@ -627,8 +627,15 @@ def _validate(config: Config) -> None:
             )
         if len(config.hotspot.passphrase) < 8:
             raise ConfigError("hotspot.passphrase must be at least 8 characters (WPA2 minimum)")
-        if not 1 <= len(config.hotspot.ssid) <= 32:
-            raise ConfigError("hotspot.ssid must be 1-32 characters")
+        # The same rules hostapd's config would be rejected by, applied here so
+        # they surface when the file is read rather than when the access point
+        # fails to come up.
+        from .gateway.hotspot import HotspotError, build_hostapd_config
+
+        try:
+            build_hostapd_config(config.hotspot)
+        except HotspotError as exc:
+            raise ConfigError(str(exc)) from exc
         if config.hotspot.band not in ("2.4", "5", "auto"):
             raise ConfigError(f"hotspot.band must be 2.4, 5 or auto, got {config.hotspot.band!r}")
 
