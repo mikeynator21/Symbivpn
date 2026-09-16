@@ -59,13 +59,61 @@ SESSION_COOKIE = "symbivpn_session"
 COOKIE_ATTRIBUTES = "HttpOnly; SameSite=Strict; Path=/"
 
 
+class _BoundedHTTPServer(ThreadingHTTPServer):
+    """A threading server that will not spawn threads without limit.
+
+    ThreadingHTTPServer makes a thread per connection and never stops. On a
+    Raspberry Pi sharing this process with the resolver, a device that opens
+    connections faster than it closes them -- whether hostile or merely
+    broken -- turns into a name resolution outage for the whole network.
+    Refusing the sixty-fifth connection is a far better failure than that.
+    """
+
+    daemon_threads = True
+    max_connections = 64
+
+    _BUSY = (
+        b"HTTP/1.1 503 Service Unavailable\r\n"
+        b"Content-Type: application/json\r\n"
+        b"Connection: close\r\n"
+        b"Content-Length: 58\r\n"
+        b"\r\n"
+        b'{"error": "too many connections; try again in a moment"}\r\n'
+    )
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._slots = threading.Semaphore(self.max_connections)
+
+    def process_request(self, request, client_address) -> None:
+        if not self._slots.acquire(blocking=False):
+            log.warning(
+                "refusing a dashboard connection from %s: all %d slots are in use",
+                client_address[0], self.max_connections,
+            )
+            try:
+                request.settimeout(2.0)
+                request.sendall(self._BUSY)
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
 class Dashboard:
     """Runs the HTTP server for one application instance."""
 
     def __init__(self, application: "Application") -> None:
         self.app = application
         self.config = application.config.dashboard
-        self._server: ThreadingHTTPServer | None = None
+        self._server: _BoundedHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._limiter = AttemptLimiter()
         #: Logged-in browsers, so a phone is asked once rather than every time.
@@ -82,7 +130,7 @@ class Dashboard:
             self.sessions.bind(self.config.password)
         handler = _make_handler(self)
         try:
-            self._server = ThreadingHTTPServer((self.config.address, self.config.port), handler)
+            self._server = _BoundedHTTPServer((self.config.address, self.config.port), handler)
         except OSError as exc:
             raise OSError(
                 f"could not bind the dashboard to {self.config.address}:{self.config.port}: {exc}"
@@ -162,6 +210,13 @@ def _make_handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "SymbiVPN"
+        #: Seconds a connection may sit without completing a request. Keep-alive
+        #: is on, so without this every browser tab that has ever loaded the
+        #: dashboard holds a thread until it is closed -- and a client that
+        #: opens connections and never finishes the request holds one each,
+        #: for as long as it likes. The dashboard shares a process with the
+        #: resolver, so those threads are taken from the network's DNS.
+        timeout = 30
         sys_version = ""
         protocol_version = "HTTP/1.1"
 

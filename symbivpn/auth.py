@@ -84,6 +84,16 @@ class AttemptLimiter:
     visible one.
     """
 
+    #: Most clients tracked at once. Both maps are keyed by address, and a
+    #: client on a local network can usually pick its own -- an IPv6 /64 gives
+    #: it more addresses than there are grains of sand. Without a ceiling the
+    #: bookkeeping meant to slow guessing becomes a way to exhaust memory in
+    #: the process that is also answering the network's DNS.
+    MAX_TRACKED = 4096
+
+    #: Seconds between full sweeps of the two maps.
+    SWEEP_INTERVAL = 1.0
+
     def __init__(self, limit: int = 5, window: float = 300.0, lockout: float = 300.0) -> None:
         self.limit = limit
         self.window = window
@@ -91,6 +101,52 @@ class AttemptLimiter:
         self._failures: dict[str, list[float]] = {}
         self._locked: dict[str, float] = {}
         self._lock = threading.Lock()
+        self._next_sweep = 0.0
+
+    def _prune(self, now: float) -> None:
+        """Forget what has expired, and cap what has not. Caller holds the lock.
+
+        Nothing ever revisits a locked-out client that simply stops trying, so
+        without this its entry stays for the life of the process.
+
+        A sweep walks both maps, so it is rate-limited rather than run on every
+        attempt: at a few thousand tracked clients, sweeping per failed login
+        would hand an attacker a way to spend the gateway's CPU by getting the
+        password wrong quickly, which is the opposite of the point.
+        """
+        over_capacity = (
+            len(self._locked) > self.MAX_TRACKED or len(self._failures) > self.MAX_TRACKED
+        )
+        if now < self._next_sweep and not over_capacity:
+            return
+        self._next_sweep = now + self.SWEEP_INTERVAL
+
+        for client, until in list(self._locked.items()):
+            if now >= until:
+                del self._locked[client]
+                self._failures.pop(client, None)
+
+        for client, times in list(self._failures.items()):
+            if not times or now - times[-1] >= self.window:
+                del self._failures[client]
+
+        # If everything tracked is still live, drop what expires soonest. An
+        # attacker able to reach this point has enough addresses that per-
+        # address lockout was not going to stop it anyway, and a bounded map
+        # matters more than holding the last few entries.
+        #
+        # Trimmed to below the ceiling rather than exactly to it, so the next
+        # entry does not put the map over again and force another sweep. That
+        # is what makes the cost amortised instead of per-attempt.
+        floor = self.MAX_TRACKED * 7 // 8
+        if len(self._locked) > self.MAX_TRACKED:
+            ordered = sorted(self._locked, key=self._locked.__getitem__)
+            for client in ordered[: len(self._locked) - floor]:
+                del self._locked[client]
+        if len(self._failures) > self.MAX_TRACKED:
+            ordered = sorted(self._failures, key=lambda key: self._failures[key][-1])
+            for client in ordered[: len(self._failures) - floor]:
+                del self._failures[client]
 
     def locked_out(self, client: str) -> float:
         """Seconds remaining on a lockout, or 0 if the client may try."""
@@ -113,18 +169,14 @@ class AttemptLimiter:
             attempts.append(now)
             self._failures[client] = attempts
 
-            if len(attempts) >= self.limit:
+            locked = len(attempts) >= self.limit
+            if locked:
                 self._locked[client] = now + self.lockout
-                return True
 
-            # Keep the map from growing without bound under a scan of many
-            # source addresses.
-            if len(self._failures) > 1024:
-                self._failures = {
-                    key: times for key, times in self._failures.items()
-                    if times and now - times[-1] < self.window
-                }
-            return False
+            # Housekeeping runs on the failure path, which is the only one an
+            # attacker controls, and where the maps actually grow.
+            self._prune(now)
+            return locked
 
     def record_success(self, client: str) -> None:
         with self._lock:
@@ -133,6 +185,10 @@ class AttemptLimiter:
 
     def status(self) -> dict[str, int]:
         with self._lock:
+            # Reporting is not the hot path, so it always sweeps first and
+            # reports what is actually still live.
+            self._next_sweep = 0.0
+            self._prune(time.monotonic())
             return {
                 "clients_with_failures": len(self._failures),
                 "locked_out": len(self._locked),

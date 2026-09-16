@@ -378,3 +378,95 @@ class CookieCsrfTests(LiveDashboardTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConnectionLimitTests(unittest.TestCase):
+    """The dashboard must not be a way to exhaust the resolver's process.
+
+    ThreadingHTTPServer makes a thread per connection and never stops, and
+    keep-alive is on, so without a cap and a timeout a client that opens
+    connections and does not finish them holds a thread each, indefinitely.
+    The resolver shares this process, so those are threads the network's DNS
+    no longer has.
+    """
+
+    #: The real cap is 64. The behaviour under test is the same at 8, and a
+    #: test that opens 64 sockets to prove it is 15 seconds nobody needs.
+    CAP = 8
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+        class Settings:
+            address = "127.0.0.1"
+            readonly = False
+            password = ""
+            port = 0
+
+        app = mock.Mock()
+        app.config.dashboard = Settings()
+        app.config.state_dir = Path(self.tmp.name)
+        app.status.return_value = {"protection": "strict"}
+        app.blocklists.rule_count = 1
+
+        patch = mock.patch.object(api._BoundedHTTPServer, "max_connections", self.CAP)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+        self.dashboard = api.Dashboard(app)
+        self.dashboard.start()
+        self.addCleanup(self.dashboard.stop)
+        self.port = self.dashboard._server.server_address[1]
+
+    def _half_open(self):
+        """A connection that starts a request and never finishes the headers."""
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        self.addCleanup(sock.close)
+        sock.sendall(b"GET /api/status HTTP/1.1\r\nHost: x\r\n")
+        return sock
+
+    def test_the_handler_has_a_read_timeout(self):
+        # Without this, a half-open connection holds its thread for the life
+        # of the process.
+        handler = self.dashboard._server.RequestHandlerClass
+        self.assertIsNotNone(handler.timeout)
+        self.assertLessEqual(handler.timeout, 120)
+
+    def test_connections_beyond_the_cap_are_refused_not_queued(self):
+        cap = self.dashboard._server.max_connections
+        for _ in range(cap):
+            self._half_open()
+
+        # One more than the server will hold: it must be told so, rather than
+        # silently occupying another thread.
+        extra = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        self.addCleanup(extra.close)
+        extra.settimeout(5)
+        self.assertIn(b"503", extra.recv(64))
+
+    def test_a_normal_request_still_works_while_the_cap_is_reached(self):
+        for _ in range(self.dashboard._server.max_connections - 1):
+            self._half_open()
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            connection.request("GET", "/api/status")
+            self.assertEqual(connection.getresponse().status, HTTPStatus.OK)
+        finally:
+            connection.close()
+
+
+class ShippedConnectionCapTests(unittest.TestCase):
+    """The value people actually run with, checked without the test override."""
+
+    def test_the_cap_is_a_sane_number(self):
+        cap = api._BoundedHTTPServer.max_connections
+        # Large enough that a household's devices never meet it, small enough
+        # that meeting it costs a bounded number of threads.
+        self.assertGreaterEqual(cap, 16)
+        self.assertLessEqual(cap, 256)
+
+    def test_the_handler_timeout_is_set_and_short(self):
+        handler = api._make_handler(mock.Mock())
+        self.assertIsNotNone(handler.timeout)
+        self.assertLessEqual(handler.timeout, 120)

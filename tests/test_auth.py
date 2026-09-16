@@ -1,5 +1,6 @@
 """Tests for dashboard authentication."""
 
+import time
 import unittest
 
 from symbivpn.auth import (
@@ -96,7 +97,17 @@ class AttemptLimiterTests(unittest.TestCase):
         limiter = AttemptLimiter(limit=100, window=0.0001)
         for index in range(2000):
             limiter.record_failure(f"10.0.{index // 256}.{index % 256}")
-        self.assertLessEqual(len(limiter._failures), 1100)
+        self.assertLessEqual(len(limiter._failures), limiter.MAX_TRACKED)
+
+    def test_stale_failures_are_dropped_once_a_sweep_runs(self):
+        # The window is tiny, so every entry is stale as soon as it is made.
+        # Sweeps are rate-limited, so the map may hold them briefly; what must
+        # not happen is that they are kept.
+        limiter = AttemptLimiter(limit=100, window=0.01)
+        for index in range(2000):
+            limiter.record_failure(f"10.0.{index // 256}.{index % 256}")
+        time.sleep(0.05)  # everything recorded is now outside the window
+        self.assertEqual(limiter.status()["clients_with_failures"], 0)
 
 
 class AdminTokenTests(unittest.TestCase):
@@ -232,3 +243,56 @@ class ExposureTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AttemptLimiterBoundsTests(unittest.TestCase):
+    """The bookkeeping that slows guessing must not itself be the weak point.
+
+    Both maps are keyed by client address, and an address on a local network
+    is something the client largely chooses -- an IPv6 /64 supplies more of
+    them than anyone could use. Nothing revisits a client that locks itself
+    out and then stops, so an unbounded map is memory the resolver sharing
+    this process no longer has.
+    """
+
+    def test_locked_out_clients_do_not_accumulate_forever(self):
+        limiter = AttemptLimiter()
+        started = time.monotonic()
+        for index in range(limiter.MAX_TRACKED * 3):
+            for _ in range(limiter.limit):
+                limiter.record_failure(f"2001:db8::{index:x}")
+        elapsed = time.monotonic() - started
+
+        status = limiter.status()
+        self.assertLessEqual(status["locked_out"], limiter.MAX_TRACKED)
+        self.assertLessEqual(status["clients_with_failures"], limiter.MAX_TRACKED)
+
+        # Housekeeping has to stay amortised. Sweeping the maps on every failed
+        # attempt would mean getting the password wrong quickly is a way to
+        # spend the gateway's CPU -- the opposite of what a rate limiter is
+        # for. The bound is generous; a per-attempt sweep is ~200x over it.
+        self.assertLess(elapsed, 5.0, "the limiter is sweeping too often")
+
+    def test_an_expired_lockout_is_forgotten_without_being_asked_about(self):
+        limiter = AttemptLimiter(limit=2, window=0.05, lockout=0.05)
+        for _ in range(2):
+            limiter.record_failure("10.0.0.9")
+        self.assertEqual(limiter.status()["locked_out"], 1)
+        time.sleep(0.1)
+        # Some other client trips the housekeeping; nothing asks about 10.0.0.9.
+        limiter.record_failure("10.0.0.10")
+        self.assertEqual(limiter.status()["locked_out"], 0)
+
+    def test_the_limiter_still_locks_out_a_guesser(self):
+        limiter = AttemptLimiter(limit=3, window=60, lockout=60)
+        self.assertFalse(limiter.record_failure("10.0.0.5"))
+        self.assertFalse(limiter.record_failure("10.0.0.5"))
+        self.assertTrue(limiter.record_failure("10.0.0.5"))
+        self.assertGreater(limiter.locked_out("10.0.0.5"), 0)
+
+    def test_a_success_clears_the_record(self):
+        limiter = AttemptLimiter(limit=3, window=60, lockout=60)
+        for _ in range(3):
+            limiter.record_failure("10.0.0.5")
+        limiter.record_success("10.0.0.5")
+        self.assertEqual(limiter.locked_out("10.0.0.5"), 0)
