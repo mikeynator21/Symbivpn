@@ -2,6 +2,7 @@
 
 import socket
 import threading
+import time
 import unittest
 
 from symbivpn import dnsmsg
@@ -14,6 +15,9 @@ from symbivpn.resolver import (
     _validate_response,
     apply_0x20,
     build_upstream,
+    parse_dot_target,
+    pin_hostname,
+    split_host_port,
 )
 
 
@@ -285,3 +289,89 @@ class Case0x20Tests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HostPortParsingTests(unittest.TestCase):
+    """Address parsing, including the IPv6 forms people actually paste."""
+
+    def test_plain_forms(self):
+        self.assertEqual(split_host_port("9.9.9.9", 53), ("9.9.9.9", 53))
+        self.assertEqual(split_host_port("9.9.9.9:5353", 53), ("9.9.9.9", 5353))
+        self.assertEqual(split_host_port("router.lan", 53), ("router.lan", 53))
+
+    def test_bare_ipv6_is_not_mistaken_for_a_port(self):
+        self.assertEqual(split_host_port("2620:fe::fe", 53), ("2620:fe::fe", 53))
+
+    def test_bracketed_ipv6_loses_its_brackets(self):
+        # Read as a hostname, "[2620:fe::fe]" resolves to nothing at all, so a
+        # resolver written the way its own documentation writes it would simply
+        # never answer.
+        self.assertEqual(split_host_port("[2620:fe::fe]", 53), ("2620:fe::fe", 53))
+        self.assertEqual(
+            split_host_port("[2620:fe::fe]:8853", 53), ("2620:fe::fe", 8853)
+        )
+
+    def test_bracketed_ipv6_resolves(self):
+        host, _ = split_host_port("[::1]:853", 53)
+        socket.getaddrinfo(host, 853, type=socket.SOCK_STREAM)
+
+    def test_malformed_targets_are_refused(self):
+        for bad in ("[2620:fe::fe", "[2620:fe::fe]junk", "9.9.9.9:nope", "9.9.9.9:0"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    split_host_port(bad, 53)
+
+    def test_dot_specs(self):
+        self.assertEqual(
+            parse_dot_target("tls://dns.quad9.net@9.9.9.9"),
+            ("dns.quad9.net", "9.9.9.9", 853),
+        )
+        self.assertEqual(
+            parse_dot_target("tls://dns.quad9.net@[2620:fe::fe]:8853"),
+            ("dns.quad9.net", "2620:fe::fe", 8853),
+        )
+        self.assertEqual(
+            parse_dot_target("tls://dns.quad9.net"),
+            ("dns.quad9.net", "dns.quad9.net", 853),
+        )
+
+    def test_pin_hostname_is_the_certificate_name(self):
+        self.assertEqual(pin_hostname("https://dns.quad9.net/dns-query"), "dns.quad9.net")
+        self.assertEqual(pin_hostname("tls://dns.quad9.net@9.9.9.9"), "dns.quad9.net")
+        # An unencrypted upstream has no certificate, so nothing to pin.
+        self.assertIsNone(pin_hostname("udp://192.168.1.1"))
+        self.assertIsNone(pin_hostname("192.168.1.1"))
+
+
+class NamedPlainUpstreamTests(unittest.TestCase):
+    """A plain upstream named rather than numbered must still be usable."""
+
+    def test_answer_from_a_named_resolver_is_accepted(self):
+        # The reply arrives from 127.0.0.1 while the upstream was written as
+        # "localhost". Comparing those as strings discards a perfectly good
+        # answer and burns the whole timeout on every query.
+        stub = StubResolver()
+        try:
+            upstream = PlainUpstream(
+                f"localhost:{stub.port}", timeout=3.0, use_0x20=False
+            )
+            query = dnsmsg.build_query("example.com", dnsmsg.TYPE_A)
+            started = time.monotonic()
+            reply = upstream.resolve(query)
+            self.assertLess(time.monotonic() - started, 1.0)
+            self.assertTrue(reply)
+        finally:
+            stub.stop()
+
+    def test_a_reply_from_elsewhere_is_still_ignored(self):
+        # The spoofing check has to keep working once the comparison is made
+        # against the resolved address rather than the spelling.
+        stub = StubResolver()
+        try:
+            upstream = PlainUpstream(
+                f"localhost:{stub.port}", timeout=3.0, use_0x20=False
+            )
+            family, sockaddr = upstream.endpoint()
+            self.assertEqual(sockaddr[0], "127.0.0.1")
+        finally:
+            stub.stop()

@@ -38,6 +38,8 @@ DEFAULT_TIMEOUT = 5.0
 # Consecutive failures before an upstream is benched, and for how long.
 FAILURE_THRESHOLD = 3
 BACKOFF_BASE = 5.0
+# How long a named plain upstream's resolved address is reused for.
+ENDPOINT_TTL = 60.0
 BACKOFF_MAX = 300.0
 
 
@@ -162,8 +164,13 @@ class DoHUpstream(Upstream):
         connection.connect()
         # Pins are checked once per connection rather than per query, which is
         # where the handshake they protect actually happens.
-        if isinstance(connection.sock, ssl.SSLSocket):
-            tlsutil.verify_pin(connection.sock, self.host, self.policy)
+        if not isinstance(connection.sock, ssl.SSLSocket):
+            # Should be unreachable for an HTTPSConnection. If it ever happens,
+            # the query has not been sent yet and the honest move is to refuse
+            # rather than to skip the check and carry on.
+            _quietly_close(connection)
+            raise ResolutionError(f"{self.spec} did not establish a TLS connection")
+        tlsutil.verify_pin(connection.sock, self.host, self.policy)
         return connection
 
     def resolve(self, query: bytes) -> bytes:
@@ -223,19 +230,7 @@ class DoTUpstream(Upstream):
         policy: tlsutil.TLSPolicy | None = None,
     ) -> None:
         super().__init__(spec, timeout)
-        target = spec[6:] if spec.startswith("tls://") else spec
-        # "host@ip" pins the address while still verifying the certificate name,
-        # which is what lets DoT work before any name resolution exists.
-        if "@" in target:
-            self.hostname, address = target.split("@", 1)
-        else:
-            self.hostname, address = target, target
-        if address.count(":") == 1:
-            host, _, port = address.partition(":")
-            self.address, self.port = host, int(port)
-        else:
-            self.address, self.port = address, 853
-        self.hostname = self.hostname.split(":")[0]
+        self.hostname, self.address, self.port = parse_dot_target(spec)
         self.policy = policy or tlsutil.TLSPolicy()
         self._context = tlsutil.build_context(self.policy)
         self._pool = _ConnectionPool(self._connect, pool_size)
@@ -287,19 +282,47 @@ class PlainUpstream(Upstream):
 
     def __init__(self, spec: str, timeout: float = DEFAULT_TIMEOUT, use_0x20: bool = True) -> None:
         super().__init__(spec, timeout)
-        target = spec.removeprefix("udp://")
-        if target.count(":") == 1:
-            host, _, port = target.partition(":")
-            self.address, self.port = host, int(port)
-        else:
-            self.address, self.port = target, 53
+        self.address, self.port = split_host_port(spec.removeprefix("udp://"), 53)
         self.use_0x20 = use_0x20
+        self._endpoint: tuple[int, tuple] | None = None
+        self._endpoint_expires = 0.0
+
+    def endpoint(self) -> tuple[int, tuple]:
+        """The socket family and address to talk to, resolving a named target.
+
+        A plain upstream is often named rather than numbered -- `router.lan`,
+        `fritz.box` -- and the anti-spoofing check below compares the sender of
+        each reply against the resolver we asked. Comparing a name to the
+        numeric address the kernel reports can only ever fail, so the name is
+        turned into an address once, here, and the comparison is made against
+        that.
+
+        The answer is cached briefly: this lookup goes to the system resolver,
+        and doing it per query would put that resolver in front of every query
+        SymbiVPN exists to answer.
+        """
+        now = time.monotonic()
+        if self._endpoint is not None and now < self._endpoint_expires:
+            return self._endpoint
+        try:
+            infos = socket.getaddrinfo(
+                self.address, self.port, type=socket.SOCK_DGRAM
+            )
+        except OSError as exc:
+            raise ResolutionError(f"{self.spec} could not be located: {exc}") from exc
+        if not infos:
+            raise ResolutionError(f"{self.spec} could not be located")
+        family, _, _, _, sockaddr = infos[0]
+        self._endpoint = (family, sockaddr)
+        self._endpoint_expires = now + ENDPOINT_TTL
+        return self._endpoint
 
     def resolve(self, query: bytes) -> bytes:
-        family = socket.AF_INET6 if ":" in self.address else socket.AF_INET
+        family, sockaddr = self.endpoint()
+        expected = sockaddr[0]
         with socket.socket(family, socket.SOCK_DGRAM) as sock:
             sock.settimeout(self.timeout)
-            sock.sendto(query, (self.address, self.port))
+            sock.sendto(query, sockaddr)
             deadline = time.monotonic() + self.timeout
             while True:
                 remaining = deadline - time.monotonic()
@@ -313,7 +336,7 @@ class PlainUpstream(Upstream):
                 except OSError as exc:
                     raise ResolutionError(f"{self.spec} unreachable: {exc}") from exc
                 # Ignore datagrams from anywhere but the resolver we asked.
-                if peer[0] != self.address:
+                if peer[0] != expected:
                     continue
                 break
 
@@ -345,6 +368,74 @@ def _read_exactly(sock, count: int) -> bytes:
         chunks.append(chunk)
         remaining -= len(chunk)
     return b"".join(chunks)
+
+
+def split_host_port(target: str, default_port: int) -> tuple[str, int]:
+    """Split "host", "host:port", "[v6]" or "[v6]:port" into (host, port).
+
+    The bracketed form matters. It is how an IPv6 address carrying a port is
+    written everywhere else, so it is the form people copy out of a resolver's
+    own documentation -- and read as a bare hostname, "[2620:fe::fe]" does not
+    resolve to anything at all.
+    """
+    text = target.strip()
+    if text.startswith("["):
+        host, closed, rest = text[1:].partition("]")
+        if not closed:
+            raise ValueError(f"{target!r} opens a bracket that is never closed")
+        if rest.startswith(":"):
+            return host, _port_number(rest[1:], target)
+        if rest:
+            raise ValueError(f"{target!r} has trailing text after the address")
+        return host, default_port
+    # A bare IPv6 address has several colons and no port; only a single colon
+    # can be a host/port separator.
+    if text.count(":") == 1:
+        host, _, port = text.partition(":")
+        return host, _port_number(port, target)
+    return text, default_port
+
+
+def _port_number(text: str, target: str) -> int:
+    try:
+        port = int(text)
+    except ValueError as exc:
+        raise ValueError(f"{target!r} has a port that is not a number") from exc
+    if not 1 <= port <= 65535:
+        raise ValueError(f"{target!r} has port {port}, which is out of range")
+    return port
+
+
+def parse_dot_target(spec: str) -> tuple[str, str, int]:
+    """Split a DoT spec into (certificate hostname, address to dial, port).
+
+    "host@ip" pins the address while still verifying the certificate name,
+    which is what lets DoT work before any name resolution exists.
+    """
+    target = spec[6:] if spec.startswith("tls://") else spec
+    if "@" in target:
+        hostname, address = target.split("@", 1)
+    else:
+        hostname, address = target, target
+    address, port = split_host_port(address, 853)
+    return hostname.split(":")[0], address, port
+
+
+def pin_hostname(spec: str) -> str | None:
+    """The name SPKI pins for `spec` must be keyed on, or None if unencrypted.
+
+    Pins are looked up by the certificate hostname of the connection, so a pin
+    written against any other spelling of the same resolver -- its IP address,
+    say -- is never consulted, and the config only looks protected. Validation
+    calls this so that such a pin is refused at load time instead of quietly
+    doing nothing; it lives here, beside the classes that do the connecting,
+    so the two cannot drift apart.
+    """
+    if spec.startswith("https://"):
+        return urllib.parse.urlparse(spec).hostname or None
+    if spec.startswith("tls://"):
+        return parse_dot_target(spec)[0] or None
+    return None
 
 
 def build_upstream(

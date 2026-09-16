@@ -1,22 +1,33 @@
 """TLS hardening for the encrypted-DNS channel.
 
 Every query SymbiVPN cannot answer locally travels this channel, so it is worth
-configuring properly rather than accepting the defaults:
+configuring properly rather than accepting the defaults.
 
-* **TLS 1.3 preferred, 1.2 the floor.** 1.3 removes renegotiation, static-RSA
-  key exchange and the non-AEAD ciphers outright, and gives forward secrecy in
-  every mode.
-* **AEAD ciphers only**, with ChaCha20-Poly1305 and AES-GCM the only options
-  left on the 1.2 fallback.
-* **Optional SPKI pinning.** Public resolvers rotate certificates but keep their
-  key, so pinning the SubjectPublicKeyInfo defends against a mis-issued
-  certificate from any CA. It is opt-in because a stale pin breaks resolution
-  for the whole network.
+There are three profiles, each giving up something real to reach the next:
+
+``compatible``
+    TLS 1.2 is the floor. The 1.2 cipher list is AEAD with forward secrecy --
+    ChaCha20-Poly1305 and AES-GCM over ECDHE or DHE.
+``strict`` (the default)
+    As above, minus finite-field Diffie-Hellman. TLS 1.2 gives the client no
+    say in the DH group, so a server may pick a weak one and the only answer
+    available is to decline DHE altogether.
+``paranoid``
+    TLS 1.3 only. That removes renegotiation, static-RSA key exchange and the
+    non-AEAD ciphers outright, and makes forward secrecy unconditional.
+
+On top of that sits **optional SPKI pinning**. Public resolvers rotate
+certificates but keep their key, so pinning the SubjectPublicKeyInfo defends
+against a mis-issued certificate from any CA -- including the local CA that
+interception proxies and some antivirus products install into the system trust
+store, which certificate verification alone cannot see through. Pinning is
+opt-in because a stale pin breaks resolution for the whole network.
 """
 
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import logging
 import ssl
@@ -27,15 +38,72 @@ log = logging.getLogger(__name__)
 
 SecurityProfile = Literal["compatible", "strict", "paranoid"]
 
-# TLS 1.2 fallback ciphers, AEAD with forward secrecy only. TLS 1.3 negotiates
-# its own suites and is unaffected by this string.
-HARDENED_CIPHERS = (
+# TLS 1.2 fallback ciphers. TLS 1.3 negotiates its own suites and ignores these
+# strings entirely, so they only matter when a resolver has not yet moved on.
+#
+# Both lists are AEAD-only with forward secrecy. What separates them is
+# finite-field Diffie-Hellman. In TLS 1.2 the client cannot negotiate the DH
+# group: the server alone chooses it, and a server that chooses a weak one
+# cannot be argued with, only refused. Elliptic-curve groups *are* negotiated,
+# so declining DHE keeps the choice of group on this side of the connection.
+COMPATIBLE_CIPHERS = (
     "ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!eNULL:!MD5:!DSS:!RC4:!3DES"
 )
+STRICT_CIPHERS = "ECDHE+AESGCM:ECDHE+CHACHA20:!aNULL:!eNULL:!MD5:!DSS:!RC4:!3DES"
+
+#: The former name for the compatible list, kept so existing imports work.
+HARDENED_CIPHERS = COMPATIBLE_CIPHERS
+
+#: The length of a SHA-256 pin, in bytes, once base64-decoded.
+PIN_LENGTH = 32
 
 
 class PinMismatch(ssl.SSLCertVerificationError):
     """The server's public key does not match any configured pin."""
+
+
+def normalise_hostname(name: str) -> str:
+    """The form a pin is keyed on: lower-case, no trailing dot, no whitespace.
+
+    DNS names are case-insensitive and "dns.quad9.net." names the same host as
+    "dns.quad9.net", but a dictionary lookup is neither of those things. Both
+    sides of the lookup go through here so that a pin written in the spelling a
+    person would naturally use is still the pin that gets checked.
+    """
+    return name.strip().rstrip(".").lower()
+
+
+def normalise_pin(value: str) -> str:
+    """Accept the spellings pins are copied in, and return the bare base64.
+
+    Pins are pasted out of HPKP headers, browser dialogs and other tools, which
+    wrap them as `pin-sha256="..."`. Taking the wrapper off here means a pasted
+    pin works rather than silently never matching.
+    """
+    text = value.strip()
+    if text.lower().startswith("pin-sha256="):
+        text = text[len("pin-sha256=") :].strip()
+    return text.strip('"').strip("'").strip()
+
+
+def parse_pin(value: str) -> bytes:
+    """Decode a configured pin to its raw digest, or raise ValueError.
+
+    Shared with config validation so that the rules for what a pin may look
+    like live in one place rather than being re-guessed at the point of use.
+    """
+    text = normalise_pin(value)
+    if not text:
+        raise ValueError("the pin is empty")
+    try:
+        raw = base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"{text!r} is not valid base64 ({exc})") from exc
+    if len(raw) != PIN_LENGTH:
+        raise ValueError(
+            f"a SHA-256 pin is {PIN_LENGTH} bytes; {text!r} decodes to {len(raw)}"
+        )
+    return raw
 
 
 @dataclass
@@ -46,11 +114,28 @@ class TLSPolicy:
     #: base64 SHA-256 SPKI pins, in the "pin-sha256" format used by HPKP.
     pins: dict[str, list[str]] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        # Normalise once, at the edge, so every later lookup can be a plain
+        # dictionary hit and cannot miss over a capital letter.
+        self.pins = {
+            normalise_hostname(host): [normalise_pin(pin) for pin in pins]
+            for host, pins in self.pins.items()
+        }
+
+    def pins_for(self, hostname: str) -> list[str]:
+        """The pins configured for `hostname`; empty if it is not pinned."""
+        return self.pins.get(normalise_hostname(hostname), [])
+
     @property
     def minimum_version(self) -> ssl.TLSVersion:
         # "compatible" still refuses everything below 1.2; the profiles differ
         # only in whether 1.2 is allowed at all.
         return ssl.TLSVersion.TLSv1_3 if self.profile == "paranoid" else ssl.TLSVersion.TLSv1_2
+
+    @property
+    def ciphers(self) -> str:
+        """The TLS 1.2 cipher list this profile allows."""
+        return COMPATIBLE_CIPHERS if self.profile == "compatible" else STRICT_CIPHERS
 
 
 def build_context(policy: TLSPolicy | None = None) -> ssl.SSLContext:
@@ -64,7 +149,7 @@ def build_context(policy: TLSPolicy | None = None) -> ssl.SSLContext:
     context.options |= ssl.OP_SINGLE_DH_USE | ssl.OP_SINGLE_ECDH_USE
 
     try:
-        context.set_ciphers(HARDENED_CIPHERS)
+        context.set_ciphers(policy.ciphers)
     except ssl.SSLError as exc:
         # An unusual OpenSSL build may not offer everything named above; the
         # default list is still safe, so carry on rather than failing to start.
@@ -95,7 +180,7 @@ def verify_pin(connection: ssl.SSLSocket, hostname: str, policy: TLSPolicy) -> N
     Raises PinMismatch if pins are configured and none of them match. Hosts with
     no pins configured are not checked -- pinning is opt-in per host.
     """
-    expected = policy.pins.get(hostname)
+    expected = policy.pins_for(hostname)
     if not expected:
         return
 

@@ -406,6 +406,58 @@ _PUBLIC_SUFFIXES = frozenset({
 })
 
 
+def _validate_upstreams(config: Config) -> None:
+    """Check the resolver list, and that every pin will actually be consulted.
+
+    Pinning fails open by design: a host with no pin configured is simply not
+    pinned. That is the right behaviour at connection time, but it means a pin
+    filed under a name SymbiVPN never connects to -- a typo, or the resolver's
+    IP where its certificate name was wanted -- protects nothing while looking
+    in the config exactly like one that does. The whole value of a pin is that
+    it is checked, so a pin that never will be is refused here.
+    """
+    from .resolver import pin_hostname, split_host_port
+    from .tlsutil import normalise_hostname, parse_pin
+
+    # Every spec has to parse, or the failure surfaces as an unreachable
+    # resolver at the first query instead of a clear error at startup.
+    pinnable: dict[str, str] = {}
+    for spec in config.upstream.servers:
+        try:
+            host = pin_hostname(spec)
+            if host is None:
+                split_host_port(spec.removeprefix("udp://"), 53)
+        except ValueError as exc:
+            raise ConfigError(f"upstream.servers contains {spec!r}: {exc}") from exc
+        if host:
+            pinnable.setdefault(normalise_hostname(host), spec)
+
+    for name, pins in config.upstream.pins.items():
+        host = normalise_hostname(name)
+        if not pins:
+            raise ConfigError(
+                f"upstream.pins lists {name!r} with no pins. An empty list "
+                f"leaves that resolver unpinned while appearing to protect it; "
+                f"remove the entry, or capture a pin with: symbivpn tls pin {name}"
+            )
+        if host not in pinnable:
+            known = ", ".join(sorted(pinnable)) or "none -- every upstream is unencrypted"
+            raise ConfigError(
+                f"upstream.pins is keyed on {name!r}, which is not the "
+                f"certificate name of any configured resolver, so the pin would "
+                f"never be checked. Pins are matched against the name in the "
+                f"upstream URL. Names available to pin: {known}."
+            )
+        for pin in pins:
+            try:
+                parse_pin(pin)
+            except ValueError as exc:
+                raise ConfigError(
+                    f"upstream.pins[{name!r}] contains a pin that is not a "
+                    f"base64 SHA-256 digest: {exc}. Capture the right value "
+                    f"with: symbivpn tls pin {name}"
+                ) from exc
+
 def _refuse_whole_suffix(entry: str, setting: str) -> None:
     """Reject an allow rule that would cover an entire public suffix."""
     cleaned = entry.strip().lower().lstrip("*").strip(".")
@@ -469,6 +521,7 @@ def _validate(config: Config) -> None:
         )
     if not config.upstream.servers:
         raise ConfigError("upstream.servers must list at least one resolver")
+    _validate_upstreams(config)
 
     if config.networks.discovery_protocols:
         from .gateway.reflector import groups_from_names

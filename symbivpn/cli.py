@@ -904,6 +904,27 @@ def command_tls(args: argparse.Namespace, cfg: Config) -> int:
     print("  [upstream.pins]")
     print(f'  "{args.hostname}" = ["{pin}"]')
     print()
+
+    # A pin is looked up by the certificate name in the upstream URL, so one
+    # captured for a host that is not an upstream would never be consulted.
+    # Config validation refuses that; say so here, while it is still easy to
+    # fix, rather than letting the next start-up be the one to explain it.
+    from .resolver import pin_hostname
+    from .tlsutil import normalise_hostname
+
+    configured = {
+        normalise_hostname(host)
+        for host in (pin_hostname(spec) for spec in cfg.upstream.servers)
+        if host
+    }
+    if normalise_hostname(args.hostname) not in configured:
+        known = ", ".join(sorted(configured)) or "none -- every upstream is unencrypted"
+        print(
+            f"Note: {args.hostname} is not one of your configured resolvers, so this\n"
+            f"pin would never be checked and SymbiVPN will refuse it. Add the resolver\n"
+            f"to upstream.servers first, or pin one you already use: {known}.\n"
+        )
+
     print(
         "Pinning rejects any certificate for this host that does not carry this\n"
         "public key. Capture the pin on a network you trust, and remember that a\n"
@@ -1024,13 +1045,18 @@ def command_harden(args: argparse.Namespace, cfg: Config) -> int:
         note("high", f"These upstreams are unencrypted: {', '.join(plaintext)}",
              "Everyone on the path to them sees every lookup this network makes.")
     if not cfg.upstream.pins:
-        note("low", "No resolver public keys are pinned.",
+        note("medium", "No resolver public keys are pinned.",
              "Certificate verification alone cannot see through an interception "
-             "whose CA your machine trusts. Capture pins on a network you trust: "
-             "symbivpn tls pin dns.quad9.net")
+             "whose CA your machine already trusts -- which is exactly what a "
+             "corporate proxy, and the TLS scanning in several antivirus "
+             "products, installs. Pinning is the only check that notices. "
+             "Capture pins on a network you trust: symbivpn tls pin dns.quad9.net")
     if cfg.upstream.tls_profile == "compatible":
-        note("low", "TLS profile is 'compatible', which allows TLS 1.2.",
-             "Use 'strict', or 'paranoid' to require TLS 1.3.")
+        note("low", "TLS profile is 'compatible', which allows finite-field "
+             "Diffie-Hellman when a resolver falls back to TLS 1.2.",
+             "TLS 1.2 gives the client no say in the DH group, so the server "
+             "alone decides how strong it is. Use 'strict' to require "
+             "elliptic-curve key exchange, or 'paranoid' to require TLS 1.3.")
 
     # -- filtering integrity ----------------------------------------------
     if cfg.blocklists.trust_remote_allow_rules:

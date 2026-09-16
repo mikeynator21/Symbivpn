@@ -28,12 +28,26 @@ attacker-supplied points — because Python's integers are not constant-time.
 DNS-over-HTTPS and DNS-over-TLS on pooled, long-lived connections:
 
 - TLS 1.3 preferred, 1.2 the floor, 1.3 required under `protection = "paranoid"`.
-- AEAD ciphers only, with forward secrecy — ECDHE/DHE with AES-GCM or
-  ChaCha20-Poly1305. No static RSA, no CBC, no RC4, no 3DES.
+- AEAD ciphers only, with forward secrecy — AES-GCM or ChaCha20-Poly1305.
+  No static RSA, no CBC, no RC4, no 3DES.
 - Certificate verification and hostname checking always on. There is no
   option to disable them.
 - TLS compression off (CRIME).
 - Optional public-key pinning, per host.
+
+`upstream.tls_profile` picks how much to give up for how much safety. Each
+step removes something the one below it allows:
+
+| profile | TLS floor | TLS 1.2 key exchange |
+| --- | --- | --- |
+| `compatible` | 1.2 | ECDHE or DHE |
+| `strict` (default) | 1.2 | ECDHE only |
+| `paranoid` | 1.3 | n/a — 1.2 is refused |
+
+`strict` declines finite-field Diffie-Hellman because TLS 1.2 gives the client
+no say in the DH group: the server alone decides how strong it is, and the only
+way to refuse a weak one is to refuse DHE. TLS 1.3 negotiates groups properly,
+so this distinction disappears above 1.2.
 
 Queries are **rebuilt** rather than forwarded, which strips EDNS Client Subnet
 and any other identifying option the client attached, and normalises the
@@ -62,6 +76,27 @@ symbivpn tls pin dns.quad9.net
 Pins are on the SubjectPublicKeyInfo, not the certificate, so a resolver
 rotating its certificate while keeping its key does not break. Capture pins
 from a network you trust.
+
+Pinning is what catches an interception whose CA the machine already trusts —
+a corporate proxy, or the TLS scanning some antivirus products install.
+Certificate verification alone cannot see through one, because the certificate
+really is valid: it was issued by a CA in the trust store.
+
+A pin is looked up by the certificate name in the upstream URL. A pin filed
+under any other name protects nothing while looking in the config exactly like
+one that does, so SymbiVPN refuses it at startup rather than letting it sit
+there:
+
+```
+upstream.pins is keyed on 'dns.qaud9.net', which is not the certificate name
+of any configured resolver, so the pin would never be checked. Names available
+to pin: dns.cloudflare.com, dns.quad9.net.
+```
+
+Spelling of the name does not matter — case and a trailing dot are ignored —
+and a pin pasted in the `pin-sha256="..."` form it appears in elsewhere is
+accepted as-is. What is refused is a pin that would be silently skipped: an
+unknown name, an empty list, or a value that is not a base64 SHA-256 digest.
 
 ### The access point
 
