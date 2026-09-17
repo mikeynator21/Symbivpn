@@ -1,8 +1,14 @@
 """Tests for X25519 key generation and the QR encoder."""
 
+import random
+import string
+import tempfile
 import unittest
+from pathlib import Path
 
 from symbivpn.vpn import crypto, qr
+from symbivpn.vpn.wireguard import PeerStore, WireGuardManager
+from tests import qrdecode
 
 
 class X25519Tests(unittest.TestCase):
@@ -284,3 +290,127 @@ class WireGuardInteropTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QRReadBackTests(unittest.TestCase):
+    """Read the payload back out, which no structural test can do.
+
+    Finder patterns, timing rows and matrix sizes can all be right while the
+    data is placed wrongly, masked wrongly, or described by a format field that
+    names the wrong mask. Every one of those produces a code a phone cannot
+    read, and every one passes the tests above. The only check that catches
+    them is reading the thing back.
+    """
+
+    def round_trip(self, payload, level="M", mask=None):
+        code = qr.encode(payload, level, mask=mask)
+        return code, qrdecode.decode(code.modules).decode()
+
+    def test_a_short_payload(self):
+        code, back = self.round_trip("hello world")
+        self.assertEqual(back, "hello world")
+
+    def test_the_format_field_names_what_was_used(self):
+        for level in ("L", "M", "Q", "H"):
+            for mask in range(8):
+                with self.subTest(level=level, mask=mask):
+                    code = qr.encode("format field check", level, mask=mask)
+                    read_level, read_mask = qrdecode.read_format(code.modules)
+                    self.assertEqual(read_level, level)
+                    self.assertEqual(read_mask, mask)
+
+    def test_every_mask_pattern_survives_a_round_trip(self):
+        payload = "SymbiVPN mask coverage " * 12
+        for mask in range(8):
+            for level in ("L", "M", "Q", "H"):
+                with self.subTest(mask=mask, level=level):
+                    _, back = self.round_trip(payload, level, mask=mask)
+                    self.assertEqual(back, payload)
+
+    def test_every_version_at_its_maximum_payload(self):
+        # The largest payload each version can hold, which is where an
+        # off-by-one in capacity, padding or interleaving shows up.
+        random.seed(20260917)
+        checked = 0
+        for level in ("L", "M", "Q", "H"):
+            for version in range(1, qr.MAX_VERSION + 1):
+                overhead = 1 + (1 if version <= 9 else 2)
+                capacity = qr._capacity_bits(version, level) // 8 - overhead
+                payload = "".join(
+                    random.choice(string.ascii_letters) for _ in range(capacity)
+                )
+                code = qr.encode(payload, level)
+                if code.version != version:
+                    continue
+                with self.subTest(level=level, version=version):
+                    self.assertEqual(qrdecode.decode(code.modules).decode(), payload)
+                checked += 1
+        # Versions 1 to 20 at four levels; if this collapses, the loop above
+        # stopped exercising what it claims to.
+        self.assertGreaterEqual(checked, 60)
+
+    def test_a_multi_block_version_is_de_interleaved_correctly(self):
+        # Above a certain size the codewords are split across several
+        # Reed-Solomon blocks and interleaved. Getting that wrong scrambles the
+        # payload while leaving the matrix looking perfectly well formed.
+        version = 17
+        _, (blocks1, _), (blocks2, _) = qr._BLOCK_TABLE[(version, "M")]
+        self.assertGreater(blocks1 + blocks2, 1)
+        payload = "block interleaving " * 25
+        code = qr.encode(payload, "M")
+        self.assertEqual(code.version, version)
+        self.assertEqual(qrdecode.decode(code.modules).decode(), payload)
+
+    def test_a_real_peer_configuration_reads_back_exactly(self):
+        # The path a person actually uses: scan this and the phone is on the
+        # VPN. A single wrong module here and it simply will not scan.
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = WireGuardManager(PeerStore(Path(tmp) / "peers.json"))
+            manager.initialise_server(endpoint="vpn.example.com")
+            manager.add_peer("phone")
+            config = manager.peer_config("phone")
+            code = manager.peer_qr("phone")
+            self.assertEqual(qrdecode.decode(code.modules).decode(), config)
+            self.assertIn("PrivateKey", config)
+
+    def test_a_mask_that_disagrees_with_the_format_field_is_caught(self):
+        # The exact shape of an encoder bug this suite could not previously
+        # see: the matrix is masked with one pattern and advertises another.
+        payload = "SymbiVPN teeth check " * 8
+        level, version = "M", qr.encode(payload, "M").version
+        size = version * 4 + 17
+        base = qr._Matrix(size)
+        qr._place_finder(base, 0, 0)
+        qr._place_finder(base, 0, size - 7)
+        qr._place_finder(base, size - 7, 0)
+        qr._place_alignment(base, version)
+        qr._place_timing(base)
+        qr._reserve_format_areas(base, version)
+        qr._place_data(
+            base,
+            qr._interleave(
+                qr._encode_payload(payload.encode(), version, level), version, level
+            ),
+        )
+        masked = qr._apply_mask(base, 3)
+        qr._write_format_information(masked, level, 5)   # advertises the wrong one
+        qr._write_version_information(masked, version)
+
+        try:
+            self.assertNotEqual(qrdecode.decode(masked.modules), payload.encode())
+        except qrdecode.DecodeError:
+            pass    # Refusing to decode it is the other correct outcome.
+
+    def test_damage_to_the_payload_is_not_silently_repaired(self):
+        # No error correction here on purpose: the reader must report what is
+        # in the matrix, not what it could be recovered to, or it would hide
+        # the faults it exists to find.
+        payload = "SymbiVPN damage check " * 8
+        code = qr.encode(payload, "M")
+        flipped = [row[:] for row in code.modules]
+        # The first data module the zigzag reads is in the bottom-right corner.
+        flipped[code.size - 1][code.size - 1] = not flipped[code.size - 1][code.size - 1]
+        try:
+            self.assertNotEqual(qrdecode.decode(flipped), payload.encode())
+        except qrdecode.DecodeError:
+            pass
