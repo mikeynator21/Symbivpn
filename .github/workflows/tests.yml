@@ -51,13 +51,20 @@ jobs:
     name: integration (a virtual network in namespaces)
     runs-on: ubuntu-latest
     # Reported, not blocking -- and that is a statement about the runner, not
-    # about the code. On a hosted runner the phone's DHCPDISCOVER never reaches
-    # the gateway, and everything after it fails for want of an address. The
-    # gateway itself is demonstrably fine there: the ruleset loads, the input
-    # chain accepts udp/67 on ap0 with an accept policy behind it, both bridge
-    # ports report state forwarding, and the server logs "DHCP serving ... on
-    # ap0" and then hears nothing. The same commit passes 66 of 66 in two
+    # about the code. On a hosted runner the phone never gets a lease, and
+    # everything after it fails for want of an address. The gateway itself is
+    # demonstrably fine there: the ruleset loads, the input chain accepts
+    # udp/67 on ap0 with an accept policy behind it, and both bridge ports
+    # report state forwarding. The same commit passes 66 of 66 in two
     # different local environments.
+    #
+    # It was believed for a long time that the DHCPDISCOVER never arrived.
+    # That was wrong, and counters now say so: on the runner the phone sent 11
+    # packets, the bridge port received 11, the bridge received 18, and four
+    # UDP datagrams were delivered to sockets. The request gets there. So the
+    # remaining suspect is the answer -- a DHCPOFFER broadcast from a socket
+    # bound to the bridge back to a client that still has no address, which is
+    # the one direction preflight never tested. It does now.
     #
     # Ruled out so far, each with evidence rather than argument:
     #   * a start-up race -- the wait is on the sockets now, not a sleep;

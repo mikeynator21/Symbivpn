@@ -149,13 +149,34 @@ def _packets(namespace: str, interface: str) -> tuple[int, int]:
     return -1, -1
 
 
-def _explain_where_it_stopped(sent_ok: bool) -> None:
+def _snapshot() -> dict[str, tuple[int, int]]:
+    """Packet counts at every hop, to be differenced across one attempt.
+
+    Totals are not usable on their own: bringing an interface up generates
+    IPv6 multicast of its own, so a hop that carried nothing during the test
+    can still show a non-zero count and read as success.
+    """
+    return {
+        "client": _packets(NS_B, "pre-cl"),
+        "port": _packets(NS_A, "pre-gw"),
+        "bridge": _packets(NS_A, BRIDGE),
+    }
+
+
+def _moved(before: dict[str, tuple[int, int]], after: dict[str, tuple[int, int]],
+           hop: str, index: int) -> int:
+    """How many packets crossed one hop during the attempt."""
+    return max(0, after[hop][index] - before[hop][index])
+
+
+def _explain_where_it_stopped(sent_ok: bool, before: dict, after: dict) -> None:
     """Say which hop the packet failed to make, rather than only that it did."""
-    _, client_tx = _packets(NS_B, "pre-cl")
-    port_rx, _ = _packets(NS_A, "pre-gw")
-    bridge_rx, _ = _packets(NS_A, BRIDGE)
-    print(f"         send call {'succeeded' if sent_ok else 'failed'}; "
-          f"client tx={client_tx}, bridge port rx={port_rx}, bridge rx={bridge_rx}")
+    client_tx = _moved(before, after, "client", 1)
+    port_rx = _moved(before, after, "port", 0)
+    bridge_rx = _moved(before, after, "bridge", 0)
+    print(f"         send call {'succeeded' if sent_ok else 'failed'}; during the "
+          f"attempt: client tx={client_tx}, bridge port rx={port_rx}, "
+          f"bridge rx={bridge_rx}")
     if not sent_ok:
         print("         -- the send itself failed, so this is routing, not the bridge")
     elif client_tx <= 0:
@@ -190,18 +211,106 @@ def attempt(
         listener.kill()
         return False
 
+    before = _snapshot()
     sender = ns(NS_B, "python3", "-c", SENDER, target, str(port), str(source_port))
     sent_ok = "SENT" in sender.stdout
 
     outcome = listener.stdout.readline().strip()
     listener.wait(timeout=10)
+    after = _snapshot()
 
     arrived = outcome.startswith("GOT")
     print(f"  [{'ok  ' if arrived else 'FAIL'}] {label}")
     if not arrived:
         if sender.stdout.strip() and not sent_ok:
             print(f"         sender said: {sender.stdout.strip()}")
-        _explain_where_it_stopped(sent_ok)
+        _explain_where_it_stopped(sent_ok, before, after)
+    return arrived
+
+
+REPLY_LISTENER = r"""
+import socket, sys
+port = int(sys.argv[1])
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"pre-cl\0")
+sock.bind(("", port))
+sock.settimeout(6)
+print("READY", flush=True)
+try:
+    payload, peer = sock.recvfrom(2048)
+    print("GOT", payload.decode(), flush=True)
+except socket.timeout:
+    print("NOTHING", flush=True)
+"""
+
+REPLY_SENDER = r"""
+import socket, sys
+port = int(sys.argv[1])
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+# Exactly how the DHCP server is bound: to the bridge, on the server port.
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"%s\0")
+sock.bind(("", %d))
+for _ in range(3):
+    try:
+        sock.sendto(b"offer", ("255.255.255.255", port))
+    except OSError as exc:
+        print("SENDFAIL", exc, flush=True)
+        raise SystemExit(1)
+print("SENT", flush=True)
+""" % (BRIDGE.encode().decode(), SERVER_PORT)
+
+
+def attempt_reply(label: str) -> bool:
+    """The server's answer, going the other way.
+
+    Every case above sends client to server. A DHCPOFFER goes the other way,
+    from a socket bound to the bridge out to a client that still has no
+    address, and nothing here tested that direction -- so a machine where the
+    request arrives and the answer does not would have passed preflight and
+    failed the testbed, saying only that no lease arrived.
+    """
+    listener = subprocess.Popen(
+        ["ip", "netns", "exec", NS_B, "python3", "-c", REPLY_LISTENER, str(CLIENT_PORT)],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    assert listener.stdout is not None
+    if listener.stdout.readline().strip() != "READY":
+        print(f"  [FAIL] {label}: the listener did not start")
+        listener.kill()
+        return False
+
+    before = _snapshot()
+    sender = ns(NS_A, "python3", "-c", REPLY_SENDER, str(CLIENT_PORT))
+    sent_ok = "SENT" in sender.stdout
+    outcome = listener.stdout.readline().strip()
+    listener.wait(timeout=10)
+    after = _snapshot()
+
+    arrived = outcome.startswith("GOT")
+    print(f"  [{'ok  ' if arrived else 'FAIL'}] {label}")
+    if not arrived:
+        if sender.stdout.strip() and not sent_ok:
+            print(f"         sender said: {sender.stdout.strip()}")
+        bridge_tx = _moved(before, after, "bridge", 1)
+        port_tx = _moved(before, after, "port", 1)
+        client_rx = _moved(before, after, "client", 0)
+        print(f"         send call {'succeeded' if sent_ok else 'failed'}; during the "
+              f"attempt: bridge tx={bridge_tx}, bridge port tx={port_tx}, "
+              f"client rx={client_rx}")
+        if not sent_ok:
+            print("         -- the send itself failed: the server cannot broadcast "
+                  "out of a socket bound to the bridge")
+        elif bridge_tx <= 0:
+            print("         -- nothing left the bridge: the broadcast was dropped "
+                  "on the way out of the gateway's stack")
+        elif client_rx <= 0:
+            print("         -- it left the bridge and never reached the client")
+        else:
+            print("         -- it reached the client's interface but not the socket")
     return arrived
 
 
@@ -231,6 +340,8 @@ def main() -> int:
             "the testbed's exact conditions",
             bind_to_device=True, target="255.255.255.255",
             port=SERVER_PORT, source_port=CLIENT_PORT)
+        results["the answer coming back the other way"] = attempt_reply(
+            "the answer coming back the other way")
     finally:
         teardown()
 
@@ -247,6 +358,13 @@ def main() -> int:
         print("Broadcasts cross, but a socket bound to the bridge with\n"
               "SO_BINDTODEVICE does not see them. That is what breaks DHCP\n"
               "here: the server binds to the access-point interface.")
+    elif not results.get("the answer coming back the other way"):
+        print("The request crosses the bridge and the answer does not. A\n"
+              "DHCPOFFER is broadcast from a socket bound to the bridge out to\n"
+              "a client that still has no address, and that direction is the\n"
+              "one this machine does not carry -- which looks from the client\n"
+              "exactly like a request that never arrived. The line above says\n"
+              "which hop the answer failed to make.")
     elif not results.get("the testbed's exact conditions"):
         print("A broadcast crosses when the client has an address of its own,\n"
               "and does not under the conditions the testbed actually uses. A\n"

@@ -229,6 +229,13 @@ class DHCPServer:
             if lease is None:
                 log.warning("DHCP pool exhausted; no address for %s", mac)
                 return None, None
+            # Logged, not just the lease that may follow: a device that is
+            # offered an address and never takes it looks identical, in a log
+            # that only records leases, to one whose request never arrived --
+            # and those have completely different answers.
+            log.info(
+                "DHCP offering %s to %s (%s)", lease.ip, mac, hostname or "unnamed"
+            )
             return self._build_reply(request, OFFER, lease), self._destination(request, lease)
 
         if message_type == REQUEST:
