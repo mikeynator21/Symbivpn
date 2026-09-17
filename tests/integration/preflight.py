@@ -228,21 +228,45 @@ def attempt(
     return arrived
 
 
+# Read off a packet socket, exactly as the testbed's DHCP client does and as
+# every real one does. A UDP socket is the wrong instrument here: the reply is
+# broadcast to a client with no address and therefore no route back to the
+# sender, which is the case reverse path filtering drops, so on a host with it
+# on the packet reaches the interface and no socket ever sees it. Testing the
+# reply over UDP would report a fault on every such machine while the thing it
+# stands in for works perfectly well.
 REPLY_LISTENER = r"""
-import socket, sys
+import socket, struct, sys
 port = int(sys.argv[1])
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"pre-cl\0")
-sock.bind(("", port))
+ETH_P_IP = 0x0800
+sock = socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, socket.htons(ETH_P_IP))
+# Not htons() on the bind: Python swaps the protocol itself there.
+sock.bind(("pre-cl", ETH_P_IP))
 sock.settimeout(6)
 print("READY", flush=True)
-try:
-    payload, peer = sock.recvfrom(2048)
-    print("GOT", payload.decode(), flush=True)
-except socket.timeout:
-    print("NOTHING", flush=True)
+deadline = __import__("time").monotonic() + 6
+while True:
+    remaining = deadline - __import__("time").monotonic()
+    if remaining <= 0:
+        print("NOTHING", flush=True)
+        break
+    sock.settimeout(remaining)
+    try:
+        packet = sock.recv(2048)
+    except socket.timeout:
+        print("NOTHING", flush=True)
+        break
+    if len(packet) < 28 or packet[0] >> 4 != 4:
+        continue
+    header_length = (packet[0] & 0x0F) * 4
+    if packet[9] != socket.IPPROTO_UDP or len(packet) < header_length + 8:
+        continue
+    udp = packet[header_length:header_length + 8]
+    if struct.unpack("!H", udp[2:4])[0] != port:
+        continue
+    length = struct.unpack("!H", udp[6:8])[0]
+    print("GOT", packet[header_length + 8:header_length + length].decode(), flush=True)
+    break
 """
 
 REPLY_SENDER = r"""
@@ -310,7 +334,8 @@ def attempt_reply(label: str) -> bool:
         elif client_rx <= 0:
             print("         -- it left the bridge and never reached the client")
         else:
-            print("         -- it reached the client's interface but not the socket")
+            print("         -- it reached the client's interface and was not read: "
+                  "the packet socket is not seeing what the interface received")
     return arrived
 
 

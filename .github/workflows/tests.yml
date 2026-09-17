@@ -50,47 +50,25 @@ jobs:
   integration:
     name: integration (a virtual network in namespaces)
     runs-on: ubuntu-latest
-    # Reported, not blocking -- and that is a statement about the runner, not
-    # about the code. On a hosted runner the phone never gets a lease, and
-    # everything after it fails for want of an address. The gateway itself is
-    # demonstrably fine there: the ruleset loads, the input chain accepts
-    # udp/67 on ap0 with an accept policy behind it, and both bridge ports
-    # report state forwarding. The same commit passes 66 of 66 in two
-    # different local environments.
+    # This spent a long time failing here and passing everywhere else, and the
+    # reason was reverse path filtering, which GitHub's runners have on.
     #
-    # It was believed for a long time that the DHCPDISCOVER never arrived.
-    # That was wrong, and counters now say so: on the runner the phone sent 11
-    # packets, the bridge port received 11, the bridge received 18, and four
-    # UDP datagrams were delivered to sockets. The request gets there. So the
-    # remaining suspect is the answer -- a DHCPOFFER broadcast from a socket
-    # bound to the bridge back to a client that still has no address, which is
-    # the one direction preflight never tested. It does now.
+    # A DHCPOFFER is broadcast to a client that has no address yet and so no
+    # route back to the server. That is precisely what rp_filter drops: the
+    # frame reaches the client's interface and no socket ever sees it. The
+    # request was always arriving -- counters say the phone sent 11 packets and
+    # the bridge received 18 -- so every theory about the request being lost
+    # was looking the wrong way down the wire.
     #
-    # Ruled out so far, each with evidence rather than argument:
-    #   * a start-up race -- the wait is on the sockets now, not a sleep;
-    #   * a lost request -- the client retransmits four times over 7.5s;
-    #   * the kernel's bridge behaviour -- preflight.py passes on the runner,
-    #     including a broadcast into a socket bound with SO_BINDTODEVICE;
-    #   * rp_filter and IP forwarding -- neither breaks it when set locally;
-    #   * SymbiVPN's own nftables ruleset -- loading it does not break it;
-    #   * anything Docker leaves on the runner (br_netfilter, a FORWARD DROP
-    #     policy): netfilter tables are per-namespace, so the host's rules
-    #     cannot reach inside the testbed at all. Setting FORWARD to DROP
-    #     locally changes nothing, as it should not.
-    # The first two were real bugs and are fixed regardless.
+    # It is also why dhclient, dhcpcd, Android and iOS all read their replies
+    # off a packet socket rather than a UDP one. The testbed's client used UDP,
+    # which works only where rp_filter is off. It uses AF_PACKET now, like a
+    # real client, and the testbed turns rp_filter *on* in every namespace so
+    # it proves the gateway on the stricter machine rather than the permissive
+    # one.
     #
-    # preflight.py now also runs the testbed's *exact* conditions -- a client
-    # with no address of its own, the veth brought up before it is enslaved,
-    # and the real DHCP ports -- because the forgiving cases gave the client an
-    # address, and an address brings routes that a client before DHCP does not
-    # have. If that case fails on the runner while the others pass, the cause
-    # is isolated to exactly that. It also reports which hop the packet failed
-    # to make, so a failure names a cause instead of only a symptom.
-    #
-    # Until it is understood it must not be able to pass silently either, so
-    # the result stays visible in every run. Run it locally before trusting a
-    # change to the gateway: sudo ./tests/integration/run.sh
-    continue-on-error: true
+    # SymbiVPN itself was never at fault: the server received every DISCOVER
+    # and offered an address each time.
     steps:
       - uses: actions/checkout@v4
       - name: Install the tools the testbed drives
@@ -98,16 +76,11 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             nftables iproute2 bind9-dnsutils openssl
-      - name: Note what this job does and does not prove
-        run: |
-          echo "::notice title=Integration testbed::Advisory on hosted runners."
-          echo "DHCP does not traverse the veth bridge here; the gateway comes"
-          echo "up correctly and hears nothing. Run it locally to trust it:"
-          echo "  sudo ./tests/integration/run.sh"
-      - name: Can this runner even carry a broadcast across a bridge?
-        # Isolates the one piece of kernel behaviour the testbed rests on,
-        # independently of SymbiVPN. Three guesses at the CI failure were
-        # wrong; this asks the question directly instead.
+      - name: Can this runner carry a broadcast across a bridge, both ways?
+        # Isolates the kernel behaviour the testbed rests on, independently of
+        # SymbiVPN, in both directions. Several guesses at why this job failed
+        # were wrong because they only ever tested the request; the answer
+        # coming back was the half that did not work. It asks directly now.
         run: sudo python3 tests/integration/preflight.py
       - name: Run the testbed
         # Root, because it builds network namespaces and loads nftables rules.

@@ -72,16 +72,82 @@ def addresses(raw: bytes) -> list[str]:
     return [socket.inet_ntoa(raw[i : i + 4]) for i in range(0, len(raw) - 3, 4)]
 
 
+ETH_P_IP = 0x0800
+
+
+class ReplyReader:
+    """Reads DHCP replies the way a real client does: off a packet socket.
+
+    A UDP socket cannot be relied on here. The reply is broadcast to a client
+    that has no address yet and therefore no routes, so a host with reverse
+    path filtering turned on drops it before any socket sees it -- the packet
+    reaches the interface and goes no further. That is not a quirk: it is why
+    dhclient, dhcpcd, Android and iOS all receive over AF_PACKET instead.
+
+    Measured, on a machine with rp_filter switched on for the client: the
+    bridge sent four frames, the client's interface received four, and a UDP
+    socket bound to that interface with SO_BINDTODEVICE saw none of them.
+
+    SOCK_DGRAM at the packet level means the kernel strips the Ethernet header,
+    so this parses IP and UDP and nothing lower.
+    """
+
+    def __init__(self, interface: str) -> None:
+        self.socket = socket.socket(
+            socket.AF_PACKET, socket.SOCK_DGRAM, socket.htons(ETH_P_IP)
+        )
+        # Not htons() here, unlike the constructor: Python byte-swaps the
+        # protocol itself for an AF_PACKET bind, so passing a swapped value
+        # binds to protocol 8 rather than 0x0800 and matches nothing. The
+        # socket comes up, reads block, and nothing says why.
+        self.socket.bind((interface, ETH_P_IP))
+
+    def settimeout(self, timeout: float) -> None:
+        self.socket.settimeout(timeout)
+
+    def read(self) -> bytes | None:
+        """The next UDP payload addressed to the DHCP client port, if any."""
+        packet = self.socket.recv(2048)
+        if len(packet) < 20:
+            return None
+        version_and_length = packet[0]
+        if version_and_length >> 4 != 4:
+            return None
+        header_length = (version_and_length & 0x0F) * 4
+        if header_length < 20 or len(packet) < header_length + 8:
+            return None
+        if packet[9] != socket.IPPROTO_UDP:
+            return None
+        # A fragment other than the first carries no UDP header to read.
+        if packet[6] & 0x1F or packet[7]:
+            return None
+        udp = packet[header_length : header_length + 8]
+        destination_port = struct.unpack("!H", udp[2:4])[0]
+        if destination_port != 68:
+            return None
+        length = struct.unpack("!H", udp[6:8])[0]
+        if length < 8:
+            return None
+        return packet[header_length + 8 : header_length + length]
+
+    def close(self) -> None:
+        self.socket.close()
+
+
 def main() -> int:
     interface = sys.argv[1] if len(sys.argv) > 1 else "eth0"
     mac = mac_of(interface)
     xid = bytes(random.getrandbits(8) for _ in range(4))
 
+    # Sent over UDP, which works from an unconfigured interface as long as the
+    # socket names the device; received over a packet socket, which is the
+    # only way to see a reply the routing layer will not deliver.
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, interface.encode() + b"\0")
     sock.bind(("", 68))
+    replies = ReplyReader(interface)
 
     def exchange(message_type, **kwargs):
         """Send, and keep sending until answered or out of attempts.
@@ -101,11 +167,13 @@ def main() -> int:
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     break
-                sock.settimeout(remaining)
+                replies.settimeout(remaining)
                 try:
-                    payload, _ = sock.recvfrom(2048)
+                    payload = replies.read()
                 except socket.timeout:
                     break
+                if payload is None:
+                    continue
                 reply = parse(payload)
                 if reply and reply["xid"] == xid:
                     return reply

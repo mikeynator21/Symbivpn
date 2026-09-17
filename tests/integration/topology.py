@@ -96,9 +96,23 @@ def teardown() -> None:
         run(["ip", "link", "del", link], check=False)
 
 
+#: Strict reverse-path filtering in every namespace, matching the hosts that
+#: have it on -- GitHub's runners among them, where this testbed spent a long
+#: time failing for want of it. A client receiving a DHCPOFFER has no address
+#: and so no route back to the server, which is exactly the case rp_filter
+#: drops, and exactly why real DHCP clients read their replies off a packet
+#: socket. Turning it on here rather than hoping the host has it off means the
+#: testbed proves the gateway works on the stricter machine, not only the
+#: permissive one.
+STRICT_REVERSE_PATH = True
+
+
 def _add_namespace(name: str) -> None:
     run(["ip", "netns", "add", name])
     ns(name, "ip", "link", "set", "lo", "up")
+    if STRICT_REVERSE_PATH:
+        ns(name, "sysctl", "-qw", "net.ipv4.conf.all.rp_filter=1")
+        ns(name, "sysctl", "-qw", "net.ipv4.conf.default.rp_filter=1")
 
 
 _link_counter = 0
