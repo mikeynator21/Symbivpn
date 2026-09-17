@@ -65,8 +65,20 @@ jobs:
     #   * the kernel's bridge behaviour -- preflight.py passes on the runner,
     #     including a broadcast into a socket bound with SO_BINDTODEVICE;
     #   * rp_filter and IP forwarding -- neither breaks it when set locally;
-    #   * SymbiVPN's own nftables ruleset -- loading it does not break it.
+    #   * SymbiVPN's own nftables ruleset -- loading it does not break it;
+    #   * anything Docker leaves on the runner (br_netfilter, a FORWARD DROP
+    #     policy): netfilter tables are per-namespace, so the host's rules
+    #     cannot reach inside the testbed at all. Setting FORWARD to DROP
+    #     locally changes nothing, as it should not.
     # The first two were real bugs and are fixed regardless.
+    #
+    # preflight.py now also runs the testbed's *exact* conditions -- a client
+    # with no address of its own, the veth brought up before it is enslaved,
+    # and the real DHCP ports -- because the forgiving cases gave the client an
+    # address, and an address brings routes that a client before DHCP does not
+    # have. If that case fails on the runner while the others pass, the cause
+    # is isolated to exactly that. It also reports which hop the packet failed
+    # to make, so a failure names a cause instead of only a symptom.
     #
     # Until it is understood it must not be able to pass silently either, so
     # the result stays visible in every run. Run it locally before trusting a
