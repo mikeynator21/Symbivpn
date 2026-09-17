@@ -528,8 +528,8 @@ class WireGuardManager:
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{name}.conf"
-        path.write_text(self.peer_config(name), encoding="utf-8")
-        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+        # This file contains the peer's private key.
+        vault.write_private(path, self.peer_config(name))
         return path
 
     # -- live interface ---------------------------------------------------
@@ -542,9 +542,8 @@ class WireGuardManager:
         """Write the server config and reload the interface without dropping it."""
         server = self._require_server()
         config_path = Path(config_path)
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(self.server_config(), encoding="utf-8")
-        os.chmod(config_path, stat.S_IRUSR | stat.S_IWUSR)
+        # This file contains the server's own private key.
+        vault.write_private(config_path, self.server_config())
 
         if not self.wg_available():
             log.warning(

@@ -405,9 +405,12 @@ def run(path: Path | None = None, force: bool = False) -> int:
     print("=" * 60)
 
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(contents, encoding="utf-8")
-        os.chmod(target, 0o600)
+        # This file carries the hotspot passphrase and the dashboard's
+        # password hash, so it must never exist world-readable, not even
+        # for the moment between being written and being chmodded.
+        from .vault import write_private
+
+        write_private(target, contents)
     except OSError as exc:
         print(f"\nCould not write {target}: {exc}", file=sys.stderr)
         if os.geteuid() != 0:

@@ -6,14 +6,18 @@ round-trips with itself is exactly the failure mode to guard against.
 """
 
 import json
+import os
 import secrets
+import stat
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from symbivpn import aesgcm, vault
+from symbivpn import aesgcm, setupwizard, vault
+from symbivpn.vpn.wireguard import PeerStore, WireGuardManager
 from symbivpn.aesgcm import InvalidTag, decrypt, encrypt, encrypt_block, expand_key
 
 
@@ -439,3 +443,62 @@ class CipherBoxTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PrivateFileWriteTests(unittest.TestCase):
+    """Files holding a key or a passphrase must never exist world-readable.
+
+    Path.write_text creates a file with the umask applied to 0666 -- 0644 on
+    an ordinary machine -- and only then can the mode be narrowed. A private
+    key readable by every user on the box for the length of one chmod is
+    exactly the window that matters.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        previous = os.umask(0o022)   # the ordinary case, not a strict one
+        self.addCleanup(os.umask, previous)
+
+    def test_a_new_file_is_never_world_readable(self):
+        path = vault.write_private(self.root / "peer.conf", "PrivateKey = secret")
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+    def test_bytes_and_text_both_work(self):
+        text = vault.write_private(self.root / "a.conf", "text")
+        raw = vault.write_private(self.root / "b.conf", b"bytes")
+        self.assertEqual(text.read_text(), "text")
+        self.assertEqual(raw.read_bytes(), b"bytes")
+
+    def test_an_existing_loose_file_is_narrowed(self):
+        path = self.root / "old.conf"
+        path.write_text("old")
+        os.chmod(path, 0o644)
+        vault.write_private(path, "new")
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        self.assertEqual(path.read_text(), "new")
+
+    def test_missing_directories_are_created(self):
+        path = vault.write_private(self.root / "deep" / "er" / "k.conf", "k")
+        self.assertTrue(path.exists())
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+    def test_a_peer_config_is_written_privately(self):
+        # The whole point: what the manager writes for a phone carries that
+        # peer's private key.
+        manager = WireGuardManager(PeerStore(self.root / "peers.json"))
+        manager.initialise_server(endpoint="vpn.example.com")
+        manager.add_peer("phone")
+        path = manager.write_peer_config("phone", self.root / "configs")
+        self.assertIn("PrivateKey", path.read_text())
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+    def test_the_wizard_writes_its_config_privately(self):
+        # The file it produces carries the hotspot passphrase and the
+        # dashboard's password hash.
+        target = self.root / "symbivpn.toml"
+        with mock.patch("builtins.print"), \
+             mock.patch("sys.stdin.isatty", return_value=False):
+            self.assertEqual(setupwizard.run(target), 0)
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)

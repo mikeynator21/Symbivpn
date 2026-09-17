@@ -366,6 +366,7 @@ def _explain_dhcp_failure(testbed: Testbed) -> None:
     thing worth knowing.
     """
     print("\n  --- no lease: what the gateway looked like ---")
+    _trace_the_missing_broadcast()
     for label, command in (
         ("listening sockets", ("ss", "-lunp")),
         ("addresses", ("ip", "-brief", "addr")),
@@ -377,6 +378,82 @@ def _explain_dhcp_failure(testbed: Testbed) -> None:
     print("  [gateway log]")
     print(testbed.read_gateway_log(40))
     print("  --- end ---\n")
+
+
+def _packets(namespace: str, interface: str) -> tuple[int, int]:
+    """(received, transmitted) packets for one interface, from /proc/net/dev.
+
+    Read there rather than parsed out of `ip -s link`, whose layout varies
+    with flags and version. A diagnostic that misparses is worse than none.
+    """
+    out = sh(namespace, "cat", "/proc/net/dev").stdout
+    for line in out.splitlines():
+        name, _, rest = line.partition(":")
+        if name.strip() != interface:
+            continue
+        fields = rest.split()
+        if len(fields) >= 10:
+            return int(fields[1]), int(fields[9])
+    return -1, -1
+
+
+def _udp_counters(namespace: str) -> dict[str, int]:
+    """The kernel's own UDP tally for a namespace.
+
+    `InDatagrams` is the one that matters here: it counts datagrams actually
+    delivered to a socket, which separates "the packet never arrived" from "it
+    arrived and nothing was listening where it landed". Those look identical
+    from the client and have opposite answers.
+
+    Not `NoPorts`, despite the name. A broadcast that matches no socket is
+    dropped without being counted there -- measured, with the client sending
+    four DISCOVERs into a gateway running no DHCP server at all: the bridge
+    counted four frames and NoPorts stayed at zero. Reading NoPorts here would
+    say the server had seen them.
+    """
+    out = sh(namespace, "cat", "/proc/net/snmp").stdout
+    keys: list[str] = []
+    for line in out.splitlines():
+        if not line.startswith("Udp:"):
+            continue
+        fields = line.split()[1:]
+        if not keys:
+            keys = fields
+        else:
+            return {key: int(value) for key, value in zip(keys, fields)}
+    return {}
+
+
+def _trace_the_missing_broadcast() -> None:
+    """Say which hop the DHCPDISCOVER failed to make.
+
+    Every check after this one fails with "network unreachable", which points
+    at the client and means only that it never got an address. These counters
+    point at the hop that actually dropped it.
+    """
+    phone_rx, phone_tx = _packets(topo.PHONE, "eth0")
+    port_rx, _ = _packets(topo.GATEWAY, "ap-phone")
+    bridge_rx, _ = _packets(topo.GATEWAY, "ap0")
+    udp = _udp_counters(topo.GATEWAY)
+
+    print(f"  [where the broadcast stopped] phone tx={phone_tx}, "
+          f"ap-phone rx={port_rx}, ap0 rx={bridge_rx}, "
+          f"gateway UDP delivered={udp.get('InDatagrams', -1)} "
+          f"errors={udp.get('InErrors', -1)} "
+          f"rcvbuf={udp.get('RcvbufErrors', -1)}")
+    if phone_tx <= 0:
+        print("    -- nothing left the phone: the send was dropped inside its own stack")
+    elif port_rx <= 0:
+        print("    -- it left the phone and never reached the bridge port: the veth")
+    elif bridge_rx <= 0:
+        print("    -- it reached the port but not the bridge: bridge forwarding")
+    elif udp.get("InDatagrams", 0) <= 0:
+        print("    -- it reached the bridge and no UDP datagram was delivered to any "
+              "socket: it landed somewhere the server is not bound")
+    else:
+        print("    -- it reached the bridge and UDP was delivered to a socket, so "
+              "look at the gateway log below. (The count is namespace-wide, so "
+              "DNS traffic raises it too -- it is a hint, not a proof.)")
 
 
 def scenario_dhcp(report: Report, testbed: Testbed) -> dict:

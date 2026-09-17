@@ -364,6 +364,31 @@ def local_key(state_dir: Path | str, *, create: bool = True) -> bytes | None:
     return key
 
 
+def write_private(path: Path | str, contents: str | bytes) -> Path:
+    """Write a file that must never be readable by anyone else.
+
+    `Path.write_text` creates the file with the process umask applied to 0666,
+    which on an ordinary machine is 0644, and only then can the mode be
+    narrowed. Between those two moments the contents are readable by every
+    user on the box -- and the things written this way are private keys and
+    passphrases, where a window is the whole problem. Opening with the mode
+    already set closes it, so nothing ever exists world-readable.
+    """
+    path = Path(path)
+    payload = contents.encode("utf-8") if isinstance(contents, str) else contents
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(
+        path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR
+    )
+    try:
+        os.write(descriptor, payload)
+    finally:
+        os.close(descriptor)
+    # An existing file keeps its old mode through O_CREAT, so narrow it too.
+    os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+    return path
+
+
 def _warn_if_readable(path: Path) -> None:
     try:
         mode = path.stat().st_mode
