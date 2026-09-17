@@ -284,46 +284,74 @@ class PlainUpstream(Upstream):
         super().__init__(spec, timeout)
         self.address, self.port = split_host_port(spec.removeprefix("udp://"), 53)
         self.use_0x20 = use_0x20
-        self._endpoint: tuple[int, tuple] | None = None
-        self._endpoint_expires = 0.0
+        self._endpoints: list[tuple[int, tuple]] | None = None
+        self._endpoints_expire = 0.0
+        #: The address that last answered, tried first next time.
+        self._working: tuple[int, tuple] | None = None
 
-    def endpoint(self) -> tuple[int, tuple]:
-        """The socket family and address to talk to, resolving a named target.
+    def endpoints(self) -> list[tuple[int, tuple]]:
+        """Every address this upstream resolves to, the one that works first.
 
         A plain upstream is often named rather than numbered -- `router.lan`,
-        `fritz.box` -- and the anti-spoofing check below compares the sender of
-        each reply against the resolver we asked. Comparing a name to the
-        numeric address the kernel reports can only ever fail, so the name is
-        turned into an address once, here, and the comparison is made against
-        that.
+        `fritz.box` -- and two things follow from that.
 
-        The answer is cached briefly: this lookup goes to the system resolver,
+        The anti-spoofing check below compares the sender of each reply against
+        the resolver we asked. Comparing a name to the numeric address the
+        kernel reports can only ever fail, so names are turned into addresses
+        here and the comparison made against those.
+
+        And a name can carry both an A and an AAAA record while only one of
+        them actually works: a LAN with no IPv6 route is the ordinary case,
+        and `localhost` on a dual-stack host resolves to `::1` first. Taking
+        only the first address would make a resolver that answers perfectly
+        well over IPv4 look dead. `socket.create_connection` tries them all,
+        which is why the TCP paths never had this problem; UDP is hand-rolled
+        here, so it has to do the same.
+
+        The list is cached briefly: this lookup goes to the system resolver,
         and doing it per query would put that resolver in front of every query
         SymbiVPN exists to answer.
         """
         now = time.monotonic()
-        if self._endpoint is not None and now < self._endpoint_expires:
-            return self._endpoint
-        try:
-            infos = socket.getaddrinfo(
-                self.address, self.port, type=socket.SOCK_DGRAM
-            )
-        except OSError as exc:
-            raise ResolutionError(f"{self.spec} could not be located: {exc}") from exc
-        if not infos:
-            raise ResolutionError(f"{self.spec} could not be located")
-        family, _, _, _, sockaddr = infos[0]
-        self._endpoint = (family, sockaddr)
-        self._endpoint_expires = now + ENDPOINT_TTL
-        return self._endpoint
+        if self._endpoints is None or now >= self._endpoints_expire:
+            try:
+                infos = socket.getaddrinfo(
+                    self.address, self.port, type=socket.SOCK_DGRAM
+                )
+            except OSError as exc:
+                raise ResolutionError(f"{self.spec} could not be located: {exc}") from exc
+            found: list[tuple[int, tuple]] = []
+            for family, _, _, _, sockaddr in infos:
+                if (family, sockaddr) not in found:
+                    found.append((family, sockaddr))
+            if not found:
+                raise ResolutionError(f"{self.spec} could not be located")
+            self._endpoints = found
+            self._endpoints_expire = now + ENDPOINT_TTL
 
-    def resolve(self, query: bytes) -> bytes:
-        family, sockaddr = self.endpoint()
+        if self._working in self._endpoints:
+            others = [end for end in self._endpoints if end != self._working]
+            return [self._working] + others  # type: ignore[list-item]
+        return list(self._endpoints)
+
+    def _ask(self, family: int, sockaddr: tuple, query: bytes, timeout: float) -> bytes:
+        """One UDP exchange with one address."""
         expected = sockaddr[0]
-        with socket.socket(family, socket.SOCK_DGRAM) as sock:
-            sock.settimeout(self.timeout)
-            sock.sendto(query, sockaddr)
-            deadline = time.monotonic() + self.timeout
+        deadline = time.monotonic() + timeout
+        try:
+            # Opening the socket can fail before anything is sent: a host with
+            # IPv6 switched off answers an AF_INET6 socket with EAFNOSUPPORT,
+            # and a name with an AAAA record is perfectly ordinary there. That
+            # is another address to skip, not an error for the caller.
+            sock = socket.socket(family, socket.SOCK_DGRAM)
+        except OSError as exc:
+            raise ResolutionError(f"{self.spec} unreachable: {exc}") from exc
+        with sock:
+            sock.settimeout(timeout)
+            try:
+                sock.sendto(query, sockaddr)
+            except OSError as exc:
+                raise ResolutionError(f"{self.spec} unreachable: {exc}") from exc
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -338,7 +366,35 @@ class PlainUpstream(Upstream):
                 # Ignore datagrams from anywhere but the resolver we asked.
                 if peer[0] != expected:
                     continue
+                return payload
+
+    def resolve(self, query: bytes) -> bytes:
+        candidates = self.endpoints()
+        deadline = time.monotonic() + self.timeout
+        payload: bytes | None = None
+        last_error: ResolutionError | None = None
+
+        for index, (family, sockaddr) in enumerate(candidates):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 break
+            # Share what is left between the addresses still to try, so a name
+            # with a dead AAAA record costs the caller its own timeout rather
+            # than one per address. The last candidate gets whatever remains.
+            left = len(candidates) - index
+            budget = remaining if left == 1 else max(remaining / left, 0.5)
+            try:
+                payload = self._ask(family, sockaddr, query, min(budget, remaining))
+            except ResolutionError as exc:
+                last_error = exc
+                continue
+            # Remember what answered, so the next query starts there rather
+            # than paying for the dead address again.
+            self._working = (family, sockaddr)
+            break
+
+        if payload is None:
+            raise last_error or ResolutionError(f"{self.spec} timed out")
 
         try:
             if dnsmsg.parse_header(payload).truncated:

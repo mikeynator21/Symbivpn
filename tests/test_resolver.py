@@ -4,6 +4,7 @@ import socket
 import threading
 import time
 import unittest
+from unittest import mock
 
 from symbivpn import dnsmsg
 from symbivpn.resolver import (
@@ -344,34 +345,139 @@ class HostPortParsingTests(unittest.TestCase):
 
 
 class NamedPlainUpstreamTests(unittest.TestCase):
-    """A plain upstream named rather than numbered must still be usable."""
+    """A plain upstream named rather than numbered must still be usable.
+
+    Names are the normal way to reach a resolver on a local network --
+    `router.lan`, `fritz.box` -- and they bring two problems a numeric address
+    does not: the reply arrives from an address that is not the name, and a
+    name can resolve to several addresses of which only some work.
+    """
+
+    def stub(self):
+        stub = StubResolver()
+        self.addCleanup(stub.stop)
+        return stub
+
+    @staticmethod
+    def _addresses(*addresses):
+        """A getaddrinfo that returns exactly these, in this order."""
+        def fake(host, port, *args, **kwargs):
+            out = []
+            for family, address in addresses:
+                if family == socket.AF_INET6:
+                    out.append((family, socket.SOCK_DGRAM, 17, "", (address, port, 0, 0)))
+                else:
+                    out.append((family, socket.SOCK_DGRAM, 17, "", (address, port)))
+            return out
+        return fake
 
     def test_answer_from_a_named_resolver_is_accepted(self):
         # The reply arrives from 127.0.0.1 while the upstream was written as
         # "localhost". Comparing those as strings discards a perfectly good
         # answer and burns the whole timeout on every query.
-        stub = StubResolver()
-        try:
-            upstream = PlainUpstream(
-                f"localhost:{stub.port}", timeout=3.0, use_0x20=False
-            )
-            query = dnsmsg.build_query("example.com", dnsmsg.TYPE_A)
-            started = time.monotonic()
-            reply = upstream.resolve(query)
-            self.assertLess(time.monotonic() - started, 1.0)
-            self.assertTrue(reply)
-        finally:
-            stub.stop()
+        stub = self.stub()
+        upstream = PlainUpstream(f"localhost:{stub.port}", timeout=5.0, use_0x20=False)
+        started = time.monotonic()
+        reply = upstream.resolve(dnsmsg.build_query("example.com", dnsmsg.TYPE_A))
+        self.assertTrue(reply)
+        self.assertLess(time.monotonic() - started, 4.0)
 
-    def test_a_reply_from_elsewhere_is_still_ignored(self):
-        # The spoofing check has to keep working once the comparison is made
-        # against the resolved address rather than the spelling.
-        stub = StubResolver()
+    def test_a_name_whose_first_address_is_dead_still_resolves(self):
+        # What a dual-stack host does with "localhost": ::1 first, and nothing
+        # listening there. Taking only the first address makes a resolver that
+        # answers perfectly well over IPv4 look dead -- and the cache pins that
+        # verdict for a minute.
+        stub = self.stub()
+        upstream = PlainUpstream(f"localhost:{stub.port}", timeout=5.0, use_0x20=False)
+        fake = self._addresses(
+            (socket.AF_INET6, "::1"), (socket.AF_INET, "127.0.0.1")
+        )
+        with mock.patch("socket.getaddrinfo", fake):
+            reply = upstream.resolve(dnsmsg.build_query("example.com", dnsmsg.TYPE_A))
+        self.assertTrue(reply)
+
+    def test_the_address_that_answered_is_tried_first_next_time(self):
+        stub = self.stub()
+        upstream = PlainUpstream(f"localhost:{stub.port}", timeout=5.0, use_0x20=False)
+        fake = self._addresses(
+            (socket.AF_INET6, "::1"), (socket.AF_INET, "127.0.0.1")
+        )
+        query = dnsmsg.build_query("example.com", dnsmsg.TYPE_A)
+        with mock.patch("socket.getaddrinfo", fake):
+            upstream.resolve(query)
+            self.assertEqual(upstream._working[0], socket.AF_INET)
+            self.assertEqual(upstream.endpoints()[0], upstream._working)
+            started = time.monotonic()
+            upstream.resolve(query)
+        # The dead address is not paid for again.
+        self.assertLess(time.monotonic() - started, 1.0)
+
+    def test_when_no_address_works_it_is_a_resolution_error(self):
+        # Not a bare OSError: the pool routes around a ResolutionError and
+        # would otherwise let an unexpected exception escape to the caller.
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            dead = probe.getsockname()[1]
+        upstream = PlainUpstream(f"localhost:{dead}", timeout=1.0, use_0x20=False)
+        fake = self._addresses(
+            (socket.AF_INET6, "::1"), (socket.AF_INET, "127.0.0.1")
+        )
+        with mock.patch("socket.getaddrinfo", fake):
+            with self.assertRaises(ResolutionError):
+                upstream.resolve(dnsmsg.build_query("example.com", dnsmsg.TYPE_A))
+
+    def test_an_unsupported_address_family_is_just_another_dead_address(self):
+        # A host with IPv6 switched off answers an AF_INET6 socket with
+        # EAFNOSUPPORT before anything is sent. That has to be skipped, not
+        # raised: a name with an AAAA record is perfectly ordinary there.
+        stub = self.stub()
+        upstream = PlainUpstream(f"localhost:{stub.port}", timeout=5.0, use_0x20=False)
+        fake = self._addresses(
+            (socket.AF_INET6, "::1"), (socket.AF_INET, "127.0.0.1")
+        )
+        real_socket = socket.socket
+
+        def refuse_ipv6(family, *args, **kwargs):
+            if family == socket.AF_INET6:
+                raise OSError(97, "Address family not supported by protocol")
+            return real_socket(family, *args, **kwargs)
+
+        with mock.patch("socket.getaddrinfo", fake), \
+             mock.patch("socket.socket", refuse_ipv6):
+            reply = upstream.resolve(dnsmsg.build_query("example.com", dnsmsg.TYPE_A))
+        self.assertTrue(reply)
+
+    def test_a_reply_from_a_different_address_is_ignored(self):
+        # The anti-spoofing check still has to work now that the comparison is
+        # made against the resolved address rather than the spelling.
         try:
-            upstream = PlainUpstream(
-                f"localhost:{stub.port}", timeout=3.0, use_0x20=False
-            )
-            family, sockaddr = upstream.endpoint()
-            self.assertEqual(sockaddr[0], "127.0.0.1")
-        finally:
-            stub.stop()
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+                probe.bind(("127.0.0.2", 0))
+        except OSError:  # pragma: no cover - not every host routes all of 127/8
+            self.skipTest("127.0.0.2 is not usable here")
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        listener.bind(("0.0.0.0", 0))
+        port = listener.getsockname()[1]
+        self.addCleanup(listener.close)
+
+        impostor = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        impostor.bind(("127.0.0.2", 0))
+        self.addCleanup(impostor.close)
+
+        def answer_from_elsewhere():
+            try:
+                payload, peer = listener.recvfrom(4096)
+            except OSError:
+                return
+            reply = dnsmsg.build_address_response(payload, dnsmsg.TYPE_A, "1.2.3.4", 60)
+            try:
+                impostor.sendto(reply, peer)   # source is 127.0.0.2, not .0.1
+            except OSError:
+                pass
+
+        threading.Thread(target=answer_from_elsewhere, daemon=True).start()
+
+        upstream = PlainUpstream(f"127.0.0.1:{port}", timeout=1.0, use_0x20=False)
+        with self.assertRaises(ResolutionError):
+            upstream.resolve(dnsmsg.build_query("example.com", dnsmsg.TYPE_A))
