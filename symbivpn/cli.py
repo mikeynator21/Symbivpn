@@ -334,6 +334,23 @@ def command_status(args: argparse.Namespace, cfg: Config) -> int:
     return 0
 
 
+def _raw_frames_available() -> bool:
+    """Whether this machine will allow a packet socket to be opened.
+
+    Asked directly rather than inferred from being root, because the capability
+    can be present without it and absent with it -- a container that drops
+    CAP_NET_RAW being the usual way.
+    """
+    import socket
+
+    try:
+        probe = socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, socket.htons(0x0800))
+    except (AttributeError, OSError):
+        return False
+    probe.close()
+    return True
+
+
 def command_doctor(args: argparse.Namespace, cfg: Config) -> int:
     """Check the machine can actually do what the config asks of it."""
     checks: list[tuple[str, bool, str]] = []
@@ -399,6 +416,20 @@ def command_doctor(args: argparse.Namespace, cfg: Config) -> int:
                 supports,
                 f"`iw list` does not report AP mode for {ap}; most USB adapters do" if not supports else "",
             ))
+
+        # Whether DHCP replies can be written to the wire directly. Without
+        # this a device with no address whose DHCP client uses an ordinary
+        # socket -- a thermostat, a plug, a camera -- may never see the offer
+        # on a host with reverse path filtering on, and nothing anywhere says
+        # so: the device just retries until it gives up.
+        raw_ok = _raw_frames_available()
+        checks.append((
+            "can send DHCP replies as raw frames",
+            raw_ok,
+            "no CAP_NET_RAW, so replies go out over UDP only; phones and laptops "
+            "are fine, simpler devices may not get a lease. Run as root."
+            if not raw_ok else "",
+        ))
 
     reachable, detail = _probe_upstream(cfg)
     checks.append(("encrypted upstream reachable", reachable, detail))

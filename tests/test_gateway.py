@@ -1157,3 +1157,52 @@ class DHCPRawSenderTests(unittest.TestCase):
         sender.open()
         sender.close()
         sender.close()
+
+
+class DHCPDeliveryDoctorTests(unittest.TestCase):
+    """`doctor` should say when this machine cannot deliver a lease.
+
+    Without a packet socket the server can only broadcast its replies from its
+    own address, and a device with no address whose DHCP client uses an
+    ordinary socket will not see them where reverse path filtering is on. That
+    is invisible from both ends -- the device simply retries -- so the one
+    place it can be said is before anything is running.
+    """
+
+    def config(self):
+        from symbivpn.config import Config
+
+        cfg = Config()
+        cfg.hotspot.enabled = True
+        cfg.hotspot.ssid = "Test"
+        cfg.hotspot.passphrase = "a-long-passphrase"
+        return cfg
+
+    def run_doctor(self, raw_available):
+        import argparse
+        from symbivpn import cli
+
+        printed = []
+        with mock.patch.object(cli, "_raw_frames_available", return_value=raw_available), \
+             mock.patch.object(cli, "_probe_upstream", return_value=(True, "")), \
+             mock.patch("builtins.print", lambda *a, **k: printed.append(" ".join(str(x) for x in a))):
+            cli.command_doctor(argparse.Namespace(), self.config())
+        return "\n".join(printed)
+
+    def test_it_is_reported_when_raw_frames_are_unavailable(self):
+        output = self.run_doctor(False)
+        self.assertIn("raw frames", output)
+        self.assertIn("FAIL", output)
+        # The hint has to say what it means for the person, not just what the
+        # capability is called.
+        self.assertIn("may not get a lease", output)
+
+    def test_it_passes_quietly_when_they_are_available(self):
+        output = self.run_doctor(True)
+        self.assertIn("raw frames", output)
+        self.assertNotIn("may not get a lease", output)
+
+    def test_the_probe_answers_without_raising_anywhere(self):
+        from symbivpn.cli import _raw_frames_available
+
+        self.assertIsInstance(_raw_frames_available(), bool)
