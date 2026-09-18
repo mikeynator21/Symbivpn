@@ -37,8 +37,13 @@ INTERNET = f"{PREFIX}-internet"
 PHONE = f"{PREFIX}-phone"
 TV = f"{PREFIX}-tv"
 GUEST = f"{PREFIX}-guest"
+#: A device on the hotspot with no address and a simple DHCP client -- a
+#: thermostat, a plug, a camera. It stands for the stacks that read their
+#: replies off an ordinary UDP socket rather than a packet socket, which is
+#: the case a broadcast reply does not reach once rp_filter is on.
+SENSOR = f"{PREFIX}-sensor"
 
-NAMESPACES = [GATEWAY, INTERNET, PHONE, TV, GUEST]
+NAMESPACES = [GATEWAY, INTERNET, PHONE, TV, GUEST, SENSOR]
 
 # The upstream world.
 UPLINK_NET = "10.200.0.0/24"
@@ -155,7 +160,9 @@ def build() -> None:
     ns(GATEWAY, "ip", "link", "set", "ap0", "up")
     ns(GATEWAY, "ip", "addr", "add", f"{AP_ADDR}/24", "dev", "ap0")
 
-    for client_ns, gateway_side in ((PHONE, "ap-phone"), (TV, "ap-tv")):
+    for client_ns, gateway_side in (
+        (PHONE, "ap-phone"), (TV, "ap-tv"), (SENSOR, "ap-sensor")
+    ):
         _link(GATEWAY, gateway_side, client_ns, "eth0")
         ns(GATEWAY, "ip", "link", "set", gateway_side, "master", "ap0")
 

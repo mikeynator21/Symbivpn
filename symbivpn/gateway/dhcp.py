@@ -113,6 +113,184 @@ class DHCPConfig:
     lease_file: Path | None = None
 
 
+ETH_P_IP = 0x0800
+BROADCAST_MAC = b"\xff" * 6
+#: RFC 2131 puts the client's hardware address at offset 28 and the flags,
+#: whose top bit asks for a broadcast reply, at offset 10.
+_CHADDR_OFFSET = 28
+_FLAGS_OFFSET = 10
+
+
+def _checksum(data: bytes) -> int:
+    """The one's-complement checksum used by IP and UDP."""
+    if len(data) % 2:
+        data += b"\x00"
+    total = 0
+    for index in range(0, len(data), 2):
+        total += (data[index] << 8) | data[index + 1]
+    while total >> 16:
+        total = (total & 0xFFFF) + (total >> 16)
+    return (~total) & 0xFFFF
+
+
+def build_reply_frame(
+    payload: bytes, source_ip: str, destination_ip: str, source_port: int, destination_port: int
+) -> bytes:
+    """An IPv4/UDP packet carrying `payload`, headers and all.
+
+    Built by hand because the point is to hand the finished thing to a packet
+    socket, below the layer that would otherwise decide whether to deliver it.
+    """
+    length = 8 + len(payload)
+    pseudo = (
+        socket.inet_aton(source_ip)
+        + socket.inet_aton(destination_ip)
+        + struct.pack("!BBH", 0, socket.IPPROTO_UDP, length)
+    )
+    udp = struct.pack("!HHHH", source_port, destination_port, length, 0)
+    checksum = _checksum(pseudo + udp + payload)
+    # RFC 768: a computed zero is transmitted as all ones, because zero means
+    # "no checksum" and the two must not be confused.
+    udp = struct.pack("!HHHH", source_port, destination_port, length, checksum or 0xFFFF)
+
+    total_length = 20 + length
+    header = struct.pack(
+        "!BBHHHBBH4s4s",
+        0x45,                       # IPv4, 20-byte header.
+        0x10,                       # Low delay, as RFC 2131 suggests for DHCP.
+        total_length,
+        0,                          # Identification; a single datagram, never fragmented.
+        0,                          # No flags, no fragment offset.
+        64,                         # TTL. The client is on-link, but be ordinary.
+        socket.IPPROTO_UDP,
+        0,                          # Checksum, filled in below.
+        socket.inet_aton(source_ip),
+        socket.inet_aton(destination_ip),
+    )
+    header = header[:10] + struct.pack("!H", _checksum(header)) + header[12:]
+    return header + udp + payload
+
+
+class RawReplySender:
+    """Sends DHCP replies as Ethernet frames, addressed to the client's MAC.
+
+    A reply to a client that has no address yet is the awkward case in DHCP.
+    Sent from this server's address it is dropped by the client's own kernel
+    wherever reverse path filtering is on: there is no route back to the server
+    from a machine with no address. The client waits, retries and gives up,
+    with nothing anywhere saying why.
+
+    Writing the frame here does *not* by itself avoid that -- a raw frame still
+    goes up through the receiver's IP input path, filter and all, which was
+    measured rather than assumed. What it buys is control of the source
+    address, which an ordinary UDP socket does not give: see `send`, where a
+    second copy sourced from 0.0.0.0 is what actually reaches the client.
+    Addressing the frame to the hardware address the request came from is the
+    other half, and is why dnsmasq and ISC's server both work this way.
+
+    Opening a packet socket needs CAP_NET_RAW. Where that is not available this
+    reports itself unavailable and the plain socket is used, which is what the
+    server did before and works wherever rp_filter is off.
+    """
+
+    def __init__(self, interface: str) -> None:
+        self.interface = interface
+        self._socket: socket.socket | None = None
+        self._raw: RawReplySender | None = None
+
+    def open(self) -> bool:
+        """Try to open the packet socket. False if this host will not allow it."""
+        raw = None
+        try:
+            raw = socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, socket.htons(ETH_P_IP))
+            # Not htons() on the bind: Python swaps the protocol itself there,
+            # and a doubly-swapped value binds to a protocol nothing uses.
+            raw.bind((self.interface, ETH_P_IP))
+        except (AttributeError, OSError) as exc:
+            if raw is not None:
+                raw.close()
+            log.info(
+                "DHCP replies will go out over UDP rather than as raw frames (%s). "
+                "Clients whose DHCP client uses a plain socket may not see them on "
+                "a host with reverse path filtering enabled.",
+                exc,
+            )
+            return False
+        self._socket = raw
+        return True
+
+    def close(self) -> None:
+        if self._raw is not None:
+            self._raw.close()
+            self._raw = None
+        if self._socket is not None:
+            self._socket.close()
+            self._socket = None
+
+    @property
+    def available(self) -> bool:
+        return self._socket is not None
+
+    def send(self, reply: bytes, source_ip: str, destination_ip: str) -> bool:
+        """Write one reply to the wire. False if it could not be sent.
+
+        A broadcast reply goes out twice, from two different source addresses,
+        and the second copy is the one that makes this work.
+
+        Sent from this server's address, a reply to a client that has no
+        address of its own is dropped by that client's kernel wherever reverse
+        path filtering is on: there is no route back to the server from a
+        machine with no address, so the frame arrives and is discarded before
+        any socket sees it. Sourced from 0.0.0.0 it is delivered, because the
+        reverse path check has nothing to look up and lets a zero source
+        through to a broadcast address -- which is exactly the case DHCP is.
+
+        Measured both ways on a client with rp_filter on: from the server's
+        address, dropped; from 0.0.0.0, delivered.
+
+        Both are sent rather than only the second, because a reply from the
+        server's own address is what every client expects and what the standard
+        describes, and a client is free to be particular about it. The extra
+        frame is a few hundred bytes, a handful of times per device.
+        """
+        if self._socket is None:
+            return False
+
+        sources = [source_ip]
+        if destination_ip == "255.255.255.255" and source_ip != "0.0.0.0":
+            sources.append("0.0.0.0")
+
+        target = (self.interface, ETH_P_IP, 0, 0, destination_mac(reply))
+        sent = False
+        for source in sources:
+            frame = build_reply_frame(
+                reply, source, destination_ip, SERVER_PORT, CLIENT_PORT
+            )
+            try:
+                self._socket.sendto(frame, target)
+                sent = True
+            except OSError as exc:
+                log.warning("DHCP raw reply from %s could not be sent (%s)", source, exc)
+        return sent
+
+
+def destination_mac(reply: bytes) -> bytes:
+    """Where a reply should be addressed: the client, or everyone.
+
+    A client that cannot yet accept a unicast frame sets the broadcast flag and
+    must be answered on the broadcast address; RFC 2131 is explicit that this
+    bit is the client's to decide, not the server's to second-guess.
+    """
+    if len(reply) < _CHADDR_OFFSET + 6:
+        return BROADCAST_MAC
+    flags = struct.unpack("!H", reply[_FLAGS_OFFSET : _FLAGS_OFFSET + 2])[0]
+    if flags & 0x8000:
+        return BROADCAST_MAC
+    mac = reply[_CHADDR_OFFSET : _CHADDR_OFFSET + 6]
+    return mac if any(mac) else BROADCAST_MAC
+
+
+
 class DHCPServer:
     """Serves addresses to hotspot clients on one interface."""
 
@@ -121,6 +299,7 @@ class DHCPServer:
         self.leases: dict[str, Lease] = {}
         self._lock = threading.RLock()
         self._socket: socket.socket | None = None
+        self._raw: RawReplySender | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._load_leases()
@@ -151,6 +330,12 @@ class DHCPServer:
         sock.settimeout(1.0)
         self._socket = sock
 
+        # Replies go out as raw frames where the host allows it, so that a
+        # client with no address receives them regardless of what its routing
+        # layer would have made of a broadcast datagram.
+        self._raw = RawReplySender(self.config.interface)
+        self._raw.open()
+
         self._stop.clear()
         self._thread = threading.Thread(target=self._serve, name="dhcp", daemon=True)
         self._thread.start()
@@ -165,6 +350,9 @@ class DHCPServer:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=3)
+        if self._raw is not None:
+            self._raw.close()
+            self._raw = None
         if self._socket is not None:
             self._socket.close()
             self._socket = None
@@ -189,10 +377,29 @@ class DHCPServer:
                 continue
 
             if reply is not None and destination is not None:
-                try:
-                    self._socket.sendto(reply, destination)
-                except OSError as exc:
-                    log.error("DHCP reply could not be sent: %s", exc)
+                self._send_reply(reply, destination)
+
+    def _send_reply(self, reply: bytes, destination: tuple[str, int]) -> None:
+        """Write a reply, as a raw frame where that is possible.
+
+        A relay agent is the exception: its address is reached by routing like
+        any other, and it is not necessarily on this link at all, so those go
+        out over the ordinary socket.
+        """
+        address, port = destination
+        direct_to_client = port == CLIENT_PORT
+        if direct_to_client and self._raw is not None and self._raw.available:
+            if self._raw.send(reply, self.config.server_ip, address):
+                return
+            # Falling through on failure rather than dropping the reply: a
+            # client that gets a late answer over UDP is better served than one
+            # that gets none at all.
+
+        assert self._socket is not None
+        try:
+            self._socket.sendto(reply, destination)
+        except OSError as exc:
+            log.error("DHCP reply could not be sent: %s", exc)
 
     # -- protocol ---------------------------------------------------------
 

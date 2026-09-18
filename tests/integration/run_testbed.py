@@ -496,6 +496,23 @@ def scenario_dhcp(report: Report, testbed: Testbed) -> dict:
         learned = ", ".join(entry.get("hostname", "") for entry in stored.values())
     report.check("gateway learned the device name", "phone" in learned,
                  f"hostname {learned!r}")
+
+    # A client that reads its replies off an ordinary UDP socket, which some
+    # embedded stacks do. Answered with a plain broadcast datagram it would
+    # never see the offer here, because reverse path filtering is on in these
+    # namespaces and it has no address yet -- so this passing is what proves
+    # the server is writing its replies as raw frames.
+    plain = sh(topo.SENSOR, "python3", str(HERE / "dhcp_client.py"), "eth0",
+               "--udp-only", timeout=30)
+    try:
+        plain_lease = json.loads(plain.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        plain_lease = {"error": (plain.stdout + plain.stderr).strip()[:160]}
+    report.check(
+        "a client reading replies over UDP is served too",
+        "error" not in plain_lease,
+        plain_lease.get("address", plain_lease.get("error", "")),
+    )
     return lease
 
 

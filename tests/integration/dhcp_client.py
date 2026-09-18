@@ -134,7 +134,39 @@ class ReplyReader:
         self.socket.close()
 
 
+class UDPReplyReader:
+    """Reads replies off an ordinary UDP socket, as simpler clients do.
+
+    Kept deliberately: some embedded DHCP clients really do this, and it is the
+    case that fails when the server answers with a plain broadcast datagram and
+    the host filters by reverse path. Running the testbed with this instead of
+    the packet socket is how the raw-frame reply path is proved to work.
+    """
+
+    def __init__(self, interface: str) -> None:
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        self.socket.setsockopt(
+            socket.SOL_SOCKET, socket.SO_BINDTODEVICE, interface.encode() + b"\0"
+        )
+        self.socket.bind(("", 68))
+
+    def settimeout(self, timeout: float) -> None:
+        self.socket.settimeout(timeout)
+
+    def read(self) -> bytes | None:
+        payload, _ = self.socket.recvfrom(2048)
+        return payload
+
+    def close(self) -> None:
+        self.socket.close()
+
+
 def main() -> int:
+    arguments = [a for a in sys.argv[1:] if not a.startswith("--")]
+    udp_only = "--udp-only" in sys.argv
+    sys.argv = [sys.argv[0]] + arguments
     interface = sys.argv[1] if len(sys.argv) > 1 else "eth0"
     mac = mac_of(interface)
     xid = bytes(random.getrandbits(8) for _ in range(4))
@@ -147,9 +179,9 @@ def main() -> int:
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, interface.encode() + b"\0")
     sock.bind(("", 68))
-    replies = ReplyReader(interface)
+    replies = UDPReplyReader(interface) if udp_only else ReplyReader(interface)
 
-    def exchange(message_type, **kwargs):
+    def exchange(message_type, expect, **kwargs):
         """Send, and keep sending until answered or out of attempts.
 
         RFC 2131 has the client retransmit with backoff, and every real client
@@ -158,6 +190,13 @@ def main() -> int:
         were brought up moments ago. Sending once and calling silence a failure
         made this less robust than any device it stands in for, and turned an
         unremarkable lost packet into a testbed that fails.
+
+        `expect` names the message types this exchange is waiting for. Matching
+        on the transaction id alone is not enough: an offer repeated by the
+        server, or a second server answering, arrives with the same id, and
+        taking it as the answer to a request reports a missing DHCPACK when
+        what actually happened was an extra DHCPOFFER. Every real client checks
+        the message type, and so does this one now.
         """
         packet = build(message_type, mac, xid, **kwargs)
         for attempt in range(4):
@@ -175,17 +214,19 @@ def main() -> int:
                 if payload is None:
                     continue
                 reply = parse(payload)
-                if reply and reply["xid"] == xid:
+                if not reply or reply["xid"] != xid:
+                    continue
+                if reply["options"].get(53, b"\x00")[0] in expect:
                     return reply
         return None
 
-    offer = exchange(DISCOVER)
+    offer = exchange(DISCOVER, (OFFER,))
     if offer is None:
         print(json.dumps({"error": "no DHCPOFFER received"}))
         return 1
 
     server_id = socket.inet_ntoa(offer["options"].get(54, b"\x00" * 4))
-    ack = exchange(REQUEST, requested=offer["yiaddr"], server=server_id)
+    ack = exchange(REQUEST, (ACK, NAK), requested=offer["yiaddr"], server=server_id)
     if ack is None or ack["options"].get(53, b"\x00")[0] != ACK:
         print(json.dumps({"error": "no DHCPACK received", "offered": offer["yiaddr"]}))
         return 1

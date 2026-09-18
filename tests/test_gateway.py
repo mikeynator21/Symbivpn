@@ -13,7 +13,7 @@ from unittest import mock
 from pathlib import Path
 
 from symbivpn.cluster import Cluster, ClusterConfig, IdleMonitor, NodeState
-from symbivpn.gateway import firewall, hotspot, networks, reflector, timeserver
+from symbivpn.gateway import dhcp, firewall, hotspot, networks, reflector, timeserver
 from symbivpn.gateway.timeserver import TimeServer
 from symbivpn.gateway.dhcp import (
     DISCOVER,
@@ -1052,3 +1052,108 @@ class HotspotConfigInjectionTests(unittest.TestCase):
         # SAE does not derive its key from the passphrase the way WPA2 does,
         # so the 63-character cap does not apply once WPA2 is dropped.
         self.build(passphrase="x" * 100, wpa3_only=True)
+
+
+class DHCPReplyFramingTests(unittest.TestCase):
+    """The hand-built IP/UDP frame the DHCP server writes to the wire.
+
+    A reply to a client that has no address yet cannot simply be routed: the
+    client's kernel drops it wherever reverse path filtering is on, because
+    there is no route back to the server from a machine with no address. The
+    server therefore builds the packet itself. Everything below is the part a
+    receiver checks, so it is checked here the same way a receiver would.
+    """
+
+    PAYLOAD = b"a DHCP reply of deliberately odd length!"
+
+    def frame(self, source="10.42.7.1", destination="255.255.255.255"):
+        return dhcp.build_reply_frame(self.PAYLOAD, source, destination, 67, 68)
+
+    def test_the_payload_survives_intact(self):
+        self.assertEqual(self.frame()[28:], self.PAYLOAD)
+
+    def test_the_ip_header_checksums_to_zero(self):
+        # How a receiver validates it: the checksum of a correct header,
+        # including its own checksum field, is zero.
+        self.assertEqual(dhcp._checksum(self.frame()[:20]), 0)
+
+    def test_the_ip_header_describes_the_packet(self):
+        frame = self.frame()
+        version_ihl, _, total = struct.unpack("!BBH", frame[:4])
+        self.assertEqual(version_ihl, 0x45)          # IPv4, 20-byte header
+        self.assertEqual(total, len(frame))
+        self.assertEqual(frame[9], socket.IPPROTO_UDP)
+        self.assertEqual(socket.inet_ntoa(frame[12:16]), "10.42.7.1")
+        self.assertEqual(socket.inet_ntoa(frame[16:20]), "255.255.255.255")
+
+    def test_the_udp_checksum_verifies(self):
+        frame = self.frame()
+        header, udp, body = frame[:20], frame[20:28], frame[28:]
+        length = struct.unpack("!H", udp[4:6])[0]
+        pseudo = header[12:16] + header[16:20] + struct.pack("!BBH", 0, 17, length)
+        self.assertEqual(dhcp._checksum(pseudo + udp + body), 0)
+
+    def test_the_udp_header_is_right(self):
+        udp = self.frame()[20:28]
+        source, destination, length, checksum = struct.unpack("!HHHH", udp)
+        self.assertEqual((source, destination), (67, 68))
+        self.assertEqual(length, 8 + len(self.PAYLOAD))
+        # RFC 768: zero means "no checksum", so a computed zero goes out as all
+        # ones instead. Never a bare zero.
+        self.assertNotEqual(checksum, 0)
+
+    def test_an_odd_length_payload_is_padded_only_for_the_checksum(self):
+        odd = dhcp.build_reply_frame(b"odd", "10.42.7.1", "10.42.7.9", 67, 68)
+        even = dhcp.build_reply_frame(b"even", "10.42.7.1", "10.42.7.9", 67, 68)
+        self.assertEqual(odd[28:], b"odd")
+        self.assertEqual(even[28:], b"even")
+        self.assertEqual(dhcp._checksum(odd[:20]), 0)
+        self.assertEqual(dhcp._checksum(even[:20]), 0)
+
+
+class DHCPReplyAddressingTests(unittest.TestCase):
+    """Where a reply is addressed, which is the client's decision to make."""
+
+    CLIENT = bytes.fromhex("c2fef275c219")
+
+    def reply(self, flags, mac):
+        packet = bytearray(240)
+        packet[10:12] = struct.pack("!H", flags)
+        packet[28:34] = mac
+        return bytes(packet)
+
+    def test_a_client_that_can_take_unicast_gets_unicast(self):
+        self.assertEqual(
+            dhcp.destination_mac(self.reply(0x0000, self.CLIENT)), self.CLIENT
+        )
+
+    def test_the_broadcast_flag_is_honoured(self):
+        # RFC 2131 makes this the client's call, not the server's to override.
+        self.assertEqual(
+            dhcp.destination_mac(self.reply(0x8000, self.CLIENT)), dhcp.BROADCAST_MAC
+        )
+
+    def test_a_reply_with_no_hardware_address_is_broadcast(self):
+        self.assertEqual(
+            dhcp.destination_mac(self.reply(0x0000, b"\x00" * 6)), dhcp.BROADCAST_MAC
+        )
+
+    def test_a_truncated_reply_is_broadcast_rather_than_indexed_blindly(self):
+        self.assertEqual(dhcp.destination_mac(b"\x02\x01\x06"), dhcp.BROADCAST_MAC)
+
+
+class DHCPRawSenderTests(unittest.TestCase):
+    """The sender has to cope with a host that will not give it a raw socket."""
+
+    def test_it_reports_itself_unavailable_rather_than_raising(self):
+        sender = dhcp.RawReplySender("definitely-not-an-interface")
+        self.assertFalse(sender.open())
+        self.assertFalse(sender.available)
+        # And sending is then a no-op that says so, so the caller can fall back.
+        self.assertFalse(sender.send(b"reply", "10.42.7.1", "255.255.255.255"))
+
+    def test_close_is_safe_when_it_never_opened(self):
+        sender = dhcp.RawReplySender("definitely-not-an-interface")
+        sender.open()
+        sender.close()
+        sender.close()

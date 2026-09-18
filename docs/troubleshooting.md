@@ -53,6 +53,38 @@ If the first returns `0.0.0.0` and the second does not, the device is not
 asking SymbiVPN. Its DHCP lease has a different DNS server — renew it, or
 check the router handed out the right one.
 
+### A device never gets an address
+
+The gateway's log shows an offer going out and the device keeps asking:
+
+```
+DHCP offering 10.42.7.11 to a4:83:e7:… (thermostat)
+DHCP offering 10.42.7.11 to a4:83:e7:… (thermostat)
+```
+
+A reply to a device that has no address yet cannot be routed to it in the
+ordinary way, and where the device's own kernel has reverse path filtering
+turned on it discards the reply before any socket sees it: there is no route
+back to the gateway from a machine with no address. Nothing on either side
+says so — the device simply retries until it gives up.
+
+SymbiVPN works around this. Replies go out as raw Ethernet frames addressed to
+the device's hardware address, and a broadcast reply is sent twice: once from
+the gateway's own address, which is what the standard describes and what every
+device expects, and once from `0.0.0.0`, which the reverse path check lets
+through because it has nothing to look up. Devices that read their replies off
+a packet socket — phones, laptops, anything running a normal DHCP client — take
+the first. Simpler embedded stacks that use an ordinary socket take the second.
+
+That needs `CAP_NET_RAW`, which the service has when it runs as root. Running
+it without that capability, the log says so at startup:
+
+```
+DHCP replies will go out over UDP rather than as raw frames
+```
+
+and devices of the second kind may not get a lease.
+
 **Check the rules loaded.**
 
 ```bash
